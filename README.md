@@ -2,14 +2,22 @@
 
 The Russian card game, in one web page. Play against card-counting bots, or with friends on their own phones.
 
-**Play:** open the GitHub Pages link for this repo (Settings → Pages shows it).
+**Play:** https://pingdevan-prog.github.io/durak/
 
 ## Playing with friends
-1. Everyone opens the same link.
-2. One person taps **Friends → Host a table** and shares the 4-letter code.
-3. Everyone else taps **Friends**, types the code, and joins. Bots fill empty seats.
+1. One person taps **Friends**, types their name, and taps **Host a table**.
+2. They tap **Share invite link** and send it. Friends open the link, type a name, and tap **Join table**. (Or tap Friends and type the 4-letter code.)
+3. The host picks how many seats and taps **Deal**. Bots fill any empty seats.
 
-The host's phone runs the game, so keep it open while you play. Phones connect directly through [PeerJS](https://peerjs.com); if a school or work Wi-Fi blocks that, try mobile data.
+The host's phone runs the game. Phones connect directly through [PeerJS](https://peerjs.com); if a school or work Wi-Fi blocks that, switch to mobile data.
+
+### If someone's connection drops
+- A friend whose phone locks or loses signal reconnects automatically and gets their seat back. While they're gone, a bot plays for them.
+- If the host's page reloads, the table reopens with the same code and the game picks up where it left off.
+- Each player has 45 seconds to attack or defend. After that a bot moves for them so nobody is stuck waiting.
+- The screen stays awake during a game with friends (on phones that support it).
+
+Your cards are only sent to your own phone, so nobody can peek at your hand.
 
 ## Rules in this version
 - 36 cards (6 to Ace); the card under the deck sets trumps.

@@ -186,6 +186,25 @@ header .sp { flex: 1; }
 .seatrow { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 10px; background: rgba(0,0,0,.2); font-size: 14px; }
 .seatrow.bot { color: var(--muted); }
 .result-big { font-size: 46px; text-align: center; margin: 4px 0 2px; }
+#bar { position: relative; }
+#emoBtn { padding: 0 10px; font-size: 18px; }
+#emoPop { position: absolute; right: 0; bottom: calc(100% + 6px); display: none; gap: 2px; padding: 6px; background: rgba(10,20,16,.96); border-radius: 14px; border: 1px solid rgba(255,255,255,.14); z-index: 60; box-shadow: 0 8px 24px rgba(0,0,0,.4); }
+#emoPop.show { display: flex; }
+#emoPop button { width: 42px; height: 42px; font-size: 24px; border: 0; background: transparent; border-radius: 10px; cursor: pointer; }
+#emoPop button:active { background: rgba(255,255,255,.12); }
+.emo { position: fixed; z-index: 1200; font-size: 40px; line-height: 1; pointer-events: none; transform: translate(-50%, -50%); animation: emo 2.2s ease-out forwards; filter: drop-shadow(0 4px 8px rgba(0,0,0,.4)); }
+@keyframes emo { 0% { transform: translate(-50%, -30%) scale(.4); opacity: 0; } 15% { transform: translate(-50%, -70%) scale(1.2); opacity: 1; } 70% { opacity: 1; } 100% { transform: translate(-50%, -150%) scale(1); opacity: 0; } }
+#netBanner { position: fixed; top: calc(6px + env(safe-area-inset-top)); left: 50%; transform: translateX(-50%); z-index: 1500; max-width: calc(100% - 32px); padding: 8px 14px; border-radius: 12px; background: rgba(120,30,30,.95); color: #fff; font-size: 13px; font-weight: 500; text-align: center; box-shadow: 0 6px 18px rgba(0,0,0,.35); display: none; }
+#netBanner.show { display: block; }
+.clock { display: inline-block; margin-left: 4px; padding: 1px 7px; border-radius: 6px; background: rgba(194,59,59,.85); color: #fff; font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; }
+#handWrap.nudge { animation: nudge .7s ease-out; }
+@keyframes nudge { 0% { box-shadow: inset 0 0 0 0 rgba(255,255,255,0); } 30% { box-shadow: inset 0 0 0 3px rgba(255,255,255,.7); } 100% { box-shadow: inset 0 0 0 0 rgba(255,255,255,0); } }
+.textin.shake { animation: shake .35s; }
+.seatrow .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.live-dot { width: 8px; height: 8px; border-radius: 50%; background: #5fd38a; box-shadow: 0 0 0 3px rgba(95,211,138,.2); }
+.tally { display: flex; flex-direction: column; gap: 4px; }
+.tally div { display: flex; justify-content: space-between; padding: 6px 10px; border-radius: 8px; background: rgba(0,0,0,.18); font-size: 14px; }
+.tally b { color: var(--brass); font-variant-numeric: tabular-nums; }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
 </style>
 </head>
@@ -209,6 +228,8 @@ header .sp { flex: 1; }
   <div id="timer"><i></i></div>
   <div id="bar">
     <div id="status"></div>
+    <button class="btn ghost" id="emoBtn" aria-label="Send a reaction" hidden>😀</button>
+    <div id="emoPop" role="menu"></div>
     <button class="btn ghost" id="sortBtn">Sort</button>
     <button class="btn danger" id="takeBtn" hidden>Take</button>
   </div>
@@ -217,6 +238,7 @@ header .sp { flex: 1; }
     <div id="hand"></div>
   </section>
 </div>
+<div id="netBanner" role="status" aria-live="polite"></div>
 <div id="sheet"><div class="panel" id="panel"></div></div>
 <script>
 // ===== Durak engine (podkidnoy, 36 cards) =====
@@ -227,7 +249,7 @@ const R = id => id % 9;
 let G = null;
 const MAX_BOUT = 5;
 const Hooks = {
-  now() { return Date.now(); }, windowMs() { return 4000; },
+  now() { return Date.now(); }, windowMs() { return 4000; }, turnMs(p) { return 0; },
   name(p) { return 'P' + p; },
   render() {}, schedule(ms) {}, onPlay(p, id, kind, i) {}, beforeClear(took) {}, onOver() {}
 };
@@ -311,6 +333,7 @@ function throwOrder() {
   return o;
 }
 function logPlay(p, id) {
+  G.turnDeadline = null;
   G.plays.push({ q: ++G.playSeq, p, id });
   if (G.plays.length > 8) G.plays.shift();
 }
@@ -360,11 +383,26 @@ function transfer(p, id) {
   G.transfers = (G.transfers || 0) + 1;
   return true;
 }
-function take(p) { G.taking = true; G.passed.clear(); G.bubble[p] = 'Take!'; }
+function take(p) { G.taking = true; G.passed.clear(); G.bubble[p] = 'Take!'; G.turnDeadline = null; }
+
+// Waits for a human to lead or defend. In multiplayer a turn clock runs; when it
+// runs out a bot makes that move for them (and keeps moving quickly until they're back).
+function humanWait(kind, p) {
+  const full = Hooks.turnMs(p);
+  if (!full) { G.waiting = kind; G.turnDeadline = null; Hooks.render(); return true; }
+  const ms = G.afk && G.afk[p] ? 8000 : full;
+  const sig = kind + p + '|' + tableCards().join(',') + '|' + G.bout + '|' + G.defender;
+  if (G.turnSig !== sig) { G.turnSig = sig; G.turnAt = Hooks.now() + ms; G.turnLen = ms; }
+  const left = G.turnAt - Hooks.now();
+  if (left > 30) { G.waiting = kind; G.turnDeadline = G.turnAt; G.turnFor = p; Hooks.render(); Hooks.schedule(left); return true; }
+  G.turnSig = null; G.turnDeadline = null;
+  (G.afk = G.afk || {})[p] = true;
+  return false;
+}
 
 function step() {
   if (!G || G.over) return;
-  G.waiting = null;
+  G.waiting = null; G.turnDeadline = null;
   // follow-up cards a bot already decided to lay down (pairs, several throw-ins)
   while (G.queue.length) {
     const q = G.queue.shift();
@@ -372,16 +410,17 @@ function step() {
   }
   const def = G.defender;
   if (G.table.length && unbeatenCount() && !G.taking) {
-    if (isH(def)) { G.waiting = 'defend'; Hooks.render(); return; }
+    if (isH(def) && humanWait('defend', def)) return;
     botDefend(def); // one action: beat one card, transfer, or take
     const more = !G.over && G.defender === def && unbeatenCount() && !G.taking;
     Hooks.render(); Hooks.schedule(more ? 'chain' : 'think'); return;
   }
   if (G.table.length === 0) {
-    if (isH(G.attacker)) { G.waiting = 'lead'; Hooks.render(); return; }
-    const a = G.attacker, cards = botLead(a);
+    const a = G.attacker;
+    if (isH(a) && humanWait('lead', a)) return;
+    const cards = botLead(a);
     throwCard(a, cards[0]);
-    G.queue = cards.slice(1).map(id => ({ p: a, id }));
+    G.queue = isH(a) ? [] : cards.slice(1).map(id => ({ p: a, id }));
     Hooks.render(); Hooks.schedule(G.queue.length ? 'chain' : 'think'); return;
   }
   // throw-in window: first come, first served
@@ -441,8 +480,10 @@ function endBout() {
 }
 
 // ----- human actions -----
+function wake(h) { if (G.afk) G.afk[h] = false; }
 function humanPlay(h, id, slot) {
   if (!G || G.over || !isH(h)) return false;
+  wake(h);
   if (h === G.defender) {
     if (G.taking) return false;
     let i = slot;
@@ -455,12 +496,13 @@ function humanPlay(h, id, slot) {
 }
 function humanTransfer(h, id) {
   if (!G || G.over || G.defender !== h || !isH(h)) return false;
+  wake(h);
   if (!transfer(h, id)) return false;
   Hooks.render(); Hooks.schedule(); return true;
 }
 function humanTake(h) {
   if (!G || G.over || G.defender !== h || !isH(h) || G.taking || !unbeatenCount()) return false;
-  take(h); Hooks.render(); Hooks.schedule(); return true;
+  wake(h); take(h); Hooks.render(); Hooks.schedule(); return true;
 }
 function whyNot(h, id) {
   if (G.over) return 'The game is over.';
@@ -731,9 +773,13 @@ function solveEndgame(me, budget = 40000) {
 }
 
 // ----- network snapshot (host -> friends) -----
-function snapshot(extra) {
+// Each friend gets only their own cards; everyone else's hand is sent as a count.
+function snapshot(extra, seat) {
   return Object.assign({
-    n: G.n, hu: G.humans, h: G.hands, dl: G.deck.length, tc: G.trumpCard, tr: G.trump, dc: G.discard.length,
+    n: G.n, hu: G.humans, h: G.hands.map((hd, p) => p === seat ? hd : hd.length),
+    ct: G.hands.map((_, p) => canThrowAny(p) ? 1 : 0),
+    tdl: G.turnDeadline ? Math.max(0, G.turnDeadline - Date.now()) : null, tf: G.turnFor == null ? -1 : G.turnFor,
+    af: G.afk ? Object.keys(G.afk).filter(k => G.afk[k]).map(Number) : [], dl: G.deck.length, tc: G.trumpCard, tr: G.trump, dc: G.discard.length,
     t: G.table.map(p => p.d == null ? [p.a] : [p.a, p.d]), a: G.attacker, d: G.defender, tk: G.taking ? 1 : 0,
     ps: [...G.passed], bl: G.boutLimit, o: [...G.out], ov: G.over ? 1 : 0, du: G.durak, b: G.bubble, bo: G.bout,
     np: G.noPassFirst ? 1 : 0, qp: G.queue.length ? G.queue[0].p : -1, pl: G.plays, cs: G.clearSeq,
@@ -743,13 +789,20 @@ function snapshot(extra) {
 function fromSnapshot(x) {
   const deck = Array(x.dl).fill(-1); if (x.dl) deck[0] = x.tc;
   return {
-    n: x.n, humans: x.hu, hands: x.h, deck, trumpCard: x.tc, trump: x.tr, discard: Array(x.dc).fill(-1),
+    n: x.n, humans: x.hu, hands: x.h.map(hd => Array.isArray(hd) ? hd : Array(+hd || 0).fill(-1)), deck,
+    ct: x.ct || null, turnDeadline: x.tdl != null ? Date.now() + x.tdl : null, turnFor: x.tf, afk: Object.fromEntries((x.af || []).map(p => [p, true])), trumpCard: x.tc, trump: x.tr, discard: Array(x.dc).fill(-1),
     table: x.t.map(p => ({ a: p[0], d: p.length > 1 ? p[1] : null })), attacker: x.a, defender: x.d, taking: !!x.tk,
     passed: new Set(x.ps), boutLimit: x.bl, out: new Set(x.o), finishOrder: [], known: Array.from({ length: x.n }, () => new Set()),
     over: !!x.ov, durak: x.du, bubble: x.b, bout: x.bo, noPassFirst: !!x.np, queue: x.qp >= 0 ? [{ p: x.qp, id: -1 }] : [],
     plays: x.pl || [], playSeq: 0, clearSeq: x.cs, lastResult: x.lr, introData: x.in, waiting: x.w, transfers: 0
   };
 }
+// Full game state for the host to survive a page reload (Sets need special handling).
+function dumpG() { return JSON.stringify(G, (k, v) => v instanceof Set ? { __set: [...v] } : v); }
+function loadG(str) { return JSON.parse(str, (k, v) => v && typeof v === 'object' && Array.isArray(v.__set) ? new Set(v.__set) : v); }
+// On a friend's phone other hands are hidden, so the host says who can still throw in.
+function canAny(p) { return G.ct ? !!G.ct[p] : canThrowAny(p); }
+function listNames(a) { return a.length <= 1 ? (a[0] || '') : a.slice(0, -1).join(', ') + ' and ' + a[a.length - 1]; }
 
 </script>
 <script>
@@ -760,6 +813,7 @@ function load(k, d) { try { const v = JSON.parse(localStorage.getItem(k)); retur
 function save(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} }
 let settings = load('durak-settings', { opps: 2, speed: 'normal', seats: 4 });
 let stats = load('durak-stats', { played: 0, durak: 0, escaped: 0 });
+let wasMyTurn = false;
 let timer = null, drag = null, handDirty = false, pendingDropRect = null, sortMode = 0, toastT = null, announcedOut = false;
 const pendingFly = new Map();
 const handEls = new Map();
@@ -771,7 +825,6 @@ let seatInfo = [];            // per seat: {k:'bot', nm} | {k:'hu', peer, by, ni
 let myOrder = [];             // my hand, in the order I arranged it
 const pending = new Map();    // cards I sent to the host, not yet confirmed (client)
 const dropRects = new Map();
-const profileNames = {};
 let lastPlaySeq = 0, gid = 0;
 
 function esc(s) { return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
@@ -779,8 +832,8 @@ function seatName(p) {
   const s = seatInfo[p];
   if (!s) return 'Player ' + (p + 1);
   if (s.k === 'bot') return s.nm;
-  const base = (s.by && profileNames[s.by]) || s.nick || 'Player ' + (p + 1);
-  return s.gone ? base + ' (bot)' : base;
+  const base = s.nick || 'Player ' + (p + 1);
+  return s.gone ? base + ' (offline)' : base;
 }
 function nm(p) { return p === me ? 'You' : seatName(p); }
 Hooks.name = p => nm(p);
@@ -796,6 +849,7 @@ function delay(kind) {
 }
 Hooks.schedule = kind => { clearTimeout(timer); timer = setTimeout(step, delay(kind ?? 'think')); };
 Hooks.render = () => { render(); if (mode === 'host') broadcastSoon(); };
+Hooks.turnMs = () => mode === 'host' ? 45000 : 0;
 Hooks.windowMs = () => ({ relaxed: 5500, normal: 4000, fast: 2600 }[settings.speed] || 4000);
 function seatRect(p) {
   const el = document.querySelector(`#opp-${p} .backs`);
@@ -835,7 +889,14 @@ function flyClear(took, def) {
 Hooks.beforeClear = (took, def) => flyClear(took, def);
 Hooks.onOver = () => {
   if (mode === 'solo') { lastDurak = { p: G.durak, n: G.n }; save('durak-last', lastDurak); }
-  if (mode === 'host') hostLastDurak = G.durak != null ? seatKey(G.durak) : null;
+  if (mode === 'host') {
+    hostLastDurak = G.durak != null ? seatKey(G.durak) : null;
+    for (let p = 0; p < G.n; p++) {
+      const k = seatKey(p); if (!k) continue;
+      const t = net.tally[k] = net.tally[k] || { nm: '', d: 0, g: 0 };
+      t.nm = seatName(p).replace(' (offline)', ''); t.g++; if (G.durak === p) t.d++;
+    }
+  }
   gameOverLocal();
 };
 function gameOverLocal() {
@@ -863,8 +924,14 @@ function introText(d) {
 // ----- render -----
 function render() {
   if (!G) return;
-  resolveNames();
-  renderHeader(); renderOpps(); renderBoard(); renderBar();
+  renderHeader(); renderOpps(); renderBoard(); renderBar(); renderNetBanner();
+  const myTurn = me >= 0 && !(mode === 'host' && net.phase !== 'game') && !G.over && !G.out.has(me) && ((!G.table.length && G.attacker === me) || (G.defender === me && G.table.length > 0 && unbeatenCount() > 0 && !G.taking));
+  if (myTurn && !wasMyTurn && mode !== 'solo') {
+    try { if (navigator.vibrate) navigator.vibrate(35); } catch (e) {}
+    const hw = $('#handWrap'); hw.classList.remove('nudge'); void hw.offsetWidth; hw.classList.add('nudge');
+  }
+  wasMyTurn = myTurn;
+  document.title = myTurn && mode !== 'solo' ? '● Your turn · Durak' : 'Durak';
   if (drag) handDirty = true; else renderHand();
   applyFly();
   if (me >= 0 && G.out.has(me) && !G.over && !announcedOut) {
@@ -940,13 +1007,13 @@ function thinkers() {
   if (G.queue.length) return [G.queue[0].p];
   if (G.table.length && unbeatenCount() && !G.taking) return G.defender === me ? [] : [G.defender];
   if (!G.table.length) return G.attacker === me ? [] : [G.attacker];
-  return throwOrder().filter(p => p !== me && !G.passed.has(p) && canThrowAny(p));
+  return throwOrder().filter(p => p !== me && !G.passed.has(p) && canAny(p));
 }
 function actorNow() {
   if (G.over) return -1;
   if (G.table.length && unbeatenCount() && !G.taking) return G.defender;
   if (!G.table.length) return G.attacker;
-  for (const p of throwOrder()) if (!G.passed.has(p) && canThrowAny(p)) return p;
+  for (const p of throwOrder()) if (!G.passed.has(p) && canAny(p)) return p;
   return -1;
 }
 const SWORD = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 3H21v6.5L10 20.5l-1.5-1.5L7 20.5 3.5 17 5 15.5 3.5 14l1.5-1.5L14.5 3z" fill="currentColor"/></svg>';
@@ -960,7 +1027,13 @@ function renderMatchup() {
   m.innerHTML = `<span class="mu att${a === me ? ' me' : ''}">${SWORD}<span><small>Attacking</small>${esc(shortName(a))}</span></span>
     <span class="mu-arrow">→</span>
     <span class="mu def${d === me ? ' me' : ''}">${SHIELD}<span><small>Defending</small>${esc(shortName(d))}</span></span>
-    ${others.length ? `<span class="mu-extra">${esc(others.map(shortName).join(', '))} can throw in</span>` : ''}`;
+    ${others.length ? `<span class="mu-extra">${esc(throwInLine(others))}</span>` : ''}`;
+}
+function throwInLine(others) {
+  const mine = others.includes(me);
+  const rest = others.filter(p => p !== me).map(shortName);
+  if (mine) return rest.length ? `You and ${listNames(rest)} can throw in` : 'You can throw in';
+  return `${listNames(rest)} can throw in`;
 }
 let timerFor = null;
 function renderTimer() {
@@ -1000,7 +1073,15 @@ function renderBar() {
       else msg = th.length === 1 ? `${esc(nm(th[0]))} is thinking…` : th.length ? 'Deciding whether to throw in…' : '';
     }
   }
+  if (h >= 0 && !G.over && G.turnDeadline && G.turnFor >= 0) {
+    const left = Math.max(0, Math.ceil((G.turnDeadline - Date.now()) / 1000));
+    if (G.turnFor === h) {
+      if (G.afk && G.afk[h]) msg = `A bot is covering for you. Play a card to take over (${left}s).`;
+      else if (left <= 20) msg += ` <span class="clock">${left}s left, then a bot moves for you</span>`;
+    } else if (left <= 20 && seatInfo[G.turnFor] && seatInfo[G.turnFor].k === 'hu') msg += ` <span class="clock">${left}s</span>`;
+  }
   st.innerHTML = (role ? `<span class="me-role ${cls}">${role}</span>` : '') + msg;
+  $('#emoBtn').hidden = mode === 'solo' || h < 0;
   $('#takeBtn').hidden = !(h >= 0 && h === G.defender && !G.over && G.table.length && unbeatenCount() && !G.taking);
   $('#sortBtn').hidden = h < 0;
   renderTimer();
@@ -1088,6 +1169,7 @@ function toast(msg, ms = 1900) {
   const t = $('#toast'); t.textContent = msg; t.classList.add('show');
   clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('show'), ms);
 }
+function hideToast() { clearTimeout(toastT); $('#toast').classList.remove('show'); }
 function reject(id) {
   const why = me >= 0 ? whyNot(me, id) : '';
   if (why) toast(why);
@@ -1100,11 +1182,12 @@ function doAction(t, id, slot, rect) {
   if (!G || me < 0) return false;
   if (mode === 'client') {
     if (t !== 'k' && !playable(id)) return false;
+    if (!net.tbl) { toast('Reconnecting… try again in a second.'); return false; }
     if (t !== 'k') {
       pending.set(id, Date.now());
       dropRects.set(id, rect || (handEls.get(id) && handEls.get(id).getBoundingClientRect()));
     }
-    net.tbl.emit('act', { t, id: t === 'k' ? null : id, s: slot == null ? null : slot }).catch(() => {});
+    net.tbl.emit('act', { t, id: t === 'k' ? null : id, s: slot == null ? null : slot, by: net.myBy, gid }).catch(() => {});
     setTimeout(() => { if (pending.has(id)) { pending.delete(id); render(); } }, 2500);
     render();
     return true;
@@ -1278,7 +1361,8 @@ function showRules() {
       <li>Last game's durak gets attacked first in the next game and can't pass that first attack on.</li>
       <li>Everyone refills to 6 cards after each bout, attacker first.</li>
       <li><b>Sort:</b> drag cards within your hand, or tap Sort. Tapping a card plays it.</li>
-      <li><b>Friends:</b> tap Friends, host a table, and have friends join with the code. Bots fill empty seats and take over for anyone who leaves.</li>
+      <li><b>Friends:</b> tap Friends, host a table, and send the invite link. Bots fill empty seats. If someone's phone drops off, a bot covers for them and they get their seat back when they reconnect.</li>
+      <li><b>Turn clock:</b> with friends, you have 45 seconds to attack or defend. After that a bot moves for you, so nobody is stuck waiting.</li>
     </ul>
     <p>The bots count cards, remember what you picked up, pass attacks on when it pays, and play the endgame perfectly once two players are left and the deck is empty.</p>
     <div class="row"><button class="btn primary" id="closeB">Got it</button></div>`, 'rules');
@@ -1294,6 +1378,7 @@ function showResult() {
   else buttons = `<button class="btn ghost" id="leaveB">Leave table</button>`;
   openSheet(`<div class="result-big">${me < 0 ? '🃏' : lost ? '🃏' : '🏆'}</div><h2 style="text-align:center">${msg}</h2>
     <p style="text-align:center;color:var(--muted);margin-top:0">${sub}</p>${me >= 0 ? statsHTML() : ''}
+    ${mode !== 'solo' ? tallyHTML() : ''}
     ${mode === 'client' ? `<p class="center muted">Waiting for ${esc(seatName(0))} to deal again…</p>` : ''}
     <div class="row">${buttons}</div>`, 'result');
   if (mode === 'solo') { $('#againB').onclick = () => { closeSheet(); startSolo(); }; $('#menuB').onclick = showMenu; }
@@ -1304,117 +1389,53 @@ $('#menuBtn').onclick = showMenu;
 $('#rulesBtn').onclick = showRules;
 $('#mpBtn').onclick = () => mode === 'solo' ? showFriends() : showMenu();
 
-// ===== multiplayer =====
-const net = { room: null, user: null, tbl: null, code: null, hostPeer: null, myBy: null, myNick: '', players: [], phase: 'lobby', ready: false, lastState: 0, offs: [], timers: [] };
+// ===== multiplayer: phones connect directly through PeerJS; the host's phone runs the game =====
+// Players are identified by a per-tab id ("by") that survives reconnects, never by the connection id.
+const net = { tbl: null, code: null, myBy: null, myNick: '', players: [], phase: 'lobby', lastState: 0, offs: [], timers: [], reconnecting: false, recSince: 0, gen: 0, seats: 4, tally: {}, emoAt: {} };
+const EMOJIS = ['👍', '😂', '😮', '😡', '🔥', '🙏'];
+const SESSION_MAX = 45 * 60 * 1000;
 let hostLastDurak = null;
-function myPeer() {
-  const src = (net.tbl && net.tbl.peers()) || [];
-  const p = src.find(x => x.sameTab) || (net.room && net.room.peers().find(x => x.sameTab));
-  return p ? p.peer : null;
-}
-function seatKey(p) { const s = seatInfo[p]; return !s ? null : s.k === 'bot' ? 'bot:' + s.nm : (s.by || s.peer); }
-async function resolveNames() {
-  if (!net.user) return;
-  const ids = new Set();
-  for (const s of seatInfo) if (s && s.k === 'hu' && s.by) ids.add(s.by);
-  for (const p of net.players) if (p.by) ids.add(p.by);
-  if (net.room) for (const p of net.room.peers()) if (p.by && p.presence && p.presence.host) ids.add(p.by);
-  const missing = [...ids].filter(id => !(id in profileNames));
-  if (!missing.length) return;
-  missing.forEach(id => { profileNames[id] = ''; });
-  try {
-    const ps = await net.user.profiles(missing);
-    let changed = false;
-    for (const id of missing) { const n = ps[id] && ps[id].name; if (n) { profileNames[id] = n; changed = true; } }
-    if (changed) { render(); refreshSheet(); }
-  } catch (e) {}
-}
-function refreshSheet() {
-  if (sheetKind === 'host') showHostLobby();
-  else if (sheetKind === 'client') showClientLobby();
-  else if (sheetKind === 'friends') showFriends();
-}
-async function initNet() {
-  if (!window.claude || typeof window.claude.use !== 'function') {
-    net.kind = 'p2p';
-    net.myBy = getPid();
-    net.myNick = load('durak-nick', { v: '' }).v;
-    net.room = { join: (name, role) => joinP2P(name, role), peers: () => [], presence: async () => {}, onPeers: () => () => {} };
-    net.ready = true;
-    if (sheetKind === 'friends') showFriends();
-    return;
-  }
-  net.kind = 'claude';
-  try {
-    const [room, user] = await Promise.all([window.claude.use('room'), window.claude.use('user')]);
-    net.room = room; net.user = user;
-    if (user) { net.myBy = await user.id(); try { net.myNick = (await user.me()).name || ''; } catch (e) {} }
-    if (room) room.onPeers(() => { if (sheetKind === 'friends') showFriends(); resolveNames(); }, () => {});
-  } catch (e) { net.room = null; }
-  net.ready = true;
-  if (sheetKind === 'friends') showFriends();
-}
-function openTables() {
-  if (!net.room) return [];
-  return net.room.peers().filter(p => !p.sameTab && p.presence && typeof p.presence.host === 'string' && /^[a-z0-9]{4}$/.test(p.presence.host));
-}
-function showFriends() {
-  let body;
-  if (!net.room) {
-    body = net.ready || !window.claude
-      ? `<p>Playing with friends works when this page is open in Claude and shared with them. It isn't available in this view right now.</p>`
-      : `<p class="muted">Connecting…</p>`;
-  } else if (net.kind === 'p2p') {
-    body = `<div class="lbl">Your name</div>
-      <input id="nickI" class="textin" maxlength="16" autocomplete="nickname" placeholder="Your name" value="${esc(net.myNick)}" aria-label="Your name">
-      <div style="height:12px"></div>
-      <button class="btn primary wide" id="hostB">Host a table</button>
-      <div class="lbl">Join a friend's table</div>
-      <form id="codeF" class="codeform"><input id="codeI" maxlength="4" autocomplete="off" autocapitalize="characters" placeholder="ABCD" aria-label="Table code"><button class="btn ghost" type="submit">Join</button></form>
-      <p class="muted small-p">Everyone opens this same link. The host taps Host a table and shares the 4-letter code. Phones connect directly, so a few school or work Wi-Fi networks may block it; mobile data usually works.</p>`;
-  } else {
-    const tables = openTables();
-    body = `<button class="btn primary wide" id="hostB">Host a table</button>
-      <div class="lbl">Open tables</div>
-      ${tables.length ? `<div class="list">${tables.map(p => `<button class="li" data-code="${p.presence.host}"><span><b>${esc((p.by && profileNames[p.by]) || 'A friend')}'s table</b><small>Code ${p.presence.host.toUpperCase()} · ${Math.min(4, +p.presence.n || 1)} of 4 seats taken</small></span><span class="go">Join</span></button>`).join('')}</div>`
-        : `<p class="muted small-p">No open tables yet. When a friend hosts one, it shows up here.</p>`}
-      <div class="lbl">Join with a code</div>
-      <form id="codeF" class="codeform"><input id="codeI" maxlength="4" autocomplete="off" autocapitalize="characters" placeholder="ABCD" aria-label="Table code"><button class="btn ghost" type="submit">Join</button></form>
-      <p class="muted small-p">Friends need a Claude account and edit access to this page. Share it from the page's Share menu.</p>`;
-  }
-  openSheet(`<h2>Play with friends</h2>${body}<div class="row"><button class="btn ghost" id="closeB">Back to bots</button></div>`, 'friends');
-  $('#closeB').onclick = closeSheet;
-  if (!net.room) return;
-  $('#hostB').onclick = hostTable;
-  document.querySelectorAll('#panel .li').forEach(b => b.onclick = () => joinTable(b.dataset.code));
-  $('#codeF').onsubmit = e => { e.preventDefault(); const c = $('#codeI').value.trim().toLowerCase(); if (/^[a-z0-9]{4}$/.test(c)) joinTable(c); else toast('Codes are 4 letters or numbers.'); };
-}
-function saveNick() {
-  const i = document.getElementById('nickI');
-  if (i) { net.myNick = i.value.trim().slice(0, 16); save('durak-nick', { v: net.myNick }); }
-  if (net.kind === 'p2p' && !net.myNick) net.myNick = 'Player';
-}
-function clearNet() {
-  net.offs.forEach(f => { try { f(); } catch (e) {} }); net.offs = [];
-  net.timers.forEach(t => clearInterval(t)); net.timers = [];
-  if (net.tbl) { net.tbl.leave().catch(() => {}); net.tbl = null; }
-  if (net.room) net.room.presence({ host: null, n: null }).catch(() => {});
-  net.code = null; net.hostPeer = null; net.players = []; net.phase = 'lobby'; net.lastState = 0;
-}
-function resetHandView() {
-  for (const el of handEls.values()) el.remove();
-  handEls.clear(); myOrder = []; pending.clear(); lastPlaySeq = 0; announcedOut = false;
-}
-function leaveTable() {
-  clearNet(); closeSheet(); mode = 'solo'; startSolo();
-}
 
-// --- direct phone-to-phone play (used outside Claude, e.g. on GitHub Pages) ---
+function ss(k, v) {
+  try {
+    if (v === undefined) return JSON.parse(sessionStorage.getItem(k));
+    if (v === null) sessionStorage.removeItem(k); else sessionStorage.setItem(k, JSON.stringify(v));
+  } catch (e) { return null; }
+}
 function getPid() {
-  let v = load('durak-pid', { v: '' }).v;
-  if (!v) { v = 'p' + Math.random().toString(36).slice(2, 12); save('durak-pid', { v }); }
+  let v = ss('durak-pid');
+  if (typeof v !== 'string' || !v) { v = 'p' + Math.random().toString(36).slice(2, 12); ss('durak-pid', v); }
   return v;
 }
+net.myBy = getPid();
+net.myNick = load('durak-nick', { v: '' }).v || '';
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+function seatKey(p) { const s = seatInfo[p]; return !s ? null : s.k === 'bot' ? 'bot:' + s.nm : s.by; }
+function seatOf(by) { return by ? seatInfo.findIndex(s => s && s.k === 'hu' && s.by === by) : -1; }
+function cleanNick(s) { return String(s || '').replace(/\s+/g, ' ').trim().slice(0, 16); }
+function hashCode() { const h = (location.hash || '').replace('#', '').trim().toLowerCase(); return /^[a-z0-9]{4}$/.test(h) ? h : null; }
+function setHash(code) { try { history.replaceState(null, '', code ? '#' + code.toUpperCase() : location.pathname + location.search); } catch (e) {} }
+function inviteUrl() { return location.origin + location.pathname + '#' + (net.code || '').toUpperCase(); }
+function netErr(e) {
+  const c = e && e.code;
+  if (c === 'not_found') return `No table with code ${(net.code || '').toUpperCase()}. Check it with your friend.`;
+  if (c === 'no_lib') return "Couldn't load the connection library. Check your internet.";
+  if (c === 'timeout') return "Found the table but couldn't connect. Try switching between Wi-Fi and mobile data.";
+  return "Couldn't reach the game server. Check your connection and try again.";
+}
+
+// ----- keep the screen on while playing with friends -----
+let wakeLock = null;
+async function keepAwake(on) {
+  try {
+    if (on && !wakeLock && navigator.wakeLock && document.visibilityState === 'visible') {
+      wakeLock = await navigator.wakeLock.request('screen');
+      wakeLock.addEventListener('release', () => { wakeLock = null; });
+    } else if (!on && wakeLock) { const w = wakeLock; wakeLock = null; await w.release(); }
+  } catch (e) {}
+}
+
+// ----- PeerJS room -----
 let peerJsLoading = null;
 function loadPeerJS() {
   if (window.Peer) return Promise.resolve();
@@ -1433,156 +1454,302 @@ function loadPeerJS() {
   });
   return peerJsLoading;
 }
-async function joinP2P(name, role) {
+async function joinP2P(code, role) {
   await loadPeerJS();
-  return makeP2PRoom(name, role);
+  return makeP2PRoom(code, role);
 }
-function makeP2PRoom(name, role) {
+function makeP2PRoom(code, role) {
   return new Promise((resolve, reject) => {
-    const hostId = 'durakgame-' + name;
+    const hostId = 'durakgame-' + code;
     const listeners = {}, peerL = [], conns = new Map(), byOf = new Map();
-    let myLabel = null, settled = false;
+    let settled = false, dropFn = null, wakeT = null;
     const peer = new window.Peer(role === 'host' ? hostId : undefined, Object.assign({ debug: 0 }, window.__peerOpts || {}));
-    const pObj = (id, me) => ({ peer: id, by: me ? net.myBy : (byOf.get(id) || null), isMe: !!me, sameTab: !!me, kind: 'viewer', guest: false, presence: {}, updatedAt: Date.now() });
     const fire = (topic, m) => (listeners[topic] || []).forEach(f => { try { f(m); } catch (e) { console.error(e); } });
-    const notify = (joined, left) => { const arr = api.peers(); peerL.forEach(f => f({ peers: arr, joined, left, updated: [] })); };
-    const fail = code => { if (settled) return; settled = true; try { peer.destroy(); } catch (e) {} reject({ code }); };
+    const fail = c => { if (settled) return; settled = true; try { peer.destroy(); } catch (e) {} reject({ code: c }); };
+    const send = (c, pkt) => { if (c && c.open) { try { c.send(pkt); } catch (e) {} } };
     function wire(conn) {
       conn.on('data', d => {
         if (!d || typeof d !== 'object' || typeof d.topic !== 'string') return;
-        fire(d.topic, { topic: d.topic, data: d.data, peer: conn.peer, by: byOf.get(conn.peer) || null, isMe: false, sameTab: false, kind: 'viewer', guest: false });
+        fire(d.topic, { topic: d.topic, data: d.data, peer: conn.peer, by: byOf.get(conn.peer) || null });
       });
-      conn.on('close', () => { if (conns.get(conn.peer) === conn) { conns.delete(conn.peer); notify([], [pObj(conn.peer)]); } });
+      conn.on('close', () => {
+        if (conns.get(conn.peer) !== conn) return;
+        conns.delete(conn.peer);
+        peerL.forEach(f => f({ joined: [], left: [conn.peer] }));
+        if (dropFn) dropFn();
+      });
       conn.on('error', () => {});
     }
     const api = {
-      name,
-      emit: async (topic, data) => {
-        const pkt = { topic, data };
-        for (const c of conns.values()) if (c.open) { try { c.send(pkt); } catch (e) {} }
-        fire(topic, { topic, data, peer: myLabel, by: net.myBy, isMe: true, sameTab: true, kind: 'viewer', guest: false });
-      },
+      emit: async (topic, data) => { for (const c of conns.values()) send(c, { topic, data }); },
+      sendTo: (id, topic, data) => send(conns.get(id), { topic, data }),
       on: (topic, fn) => { (listeners[topic] = listeners[topic] || []).push(fn); return () => { listeners[topic] = (listeners[topic] || []).filter(x => x !== fn); }; },
       onPeers: fn => { peerL.push(fn); return () => { const i = peerL.indexOf(fn); if (i >= 0) peerL.splice(i, 1); }; },
-      peers: () => [pObj(myLabel, true), ...[...conns.keys()].map(id => pObj(id))],
-      presence: async () => {},
-      connected: () => !peer.disconnected,
-      leave: async () => { try { peer.destroy(); } catch (e) {} }
+      onDrop: fn => { dropFn = fn; },
+      has: id => { const c = conns.get(id); return !!(c && c.open); },
+      drop: id => { const c = conns.get(id); if (c) { conns.delete(id); try { c.close(); } catch (e) {} } },
+      wake: () => {
+        if (wakeT || peer.destroyed || !peer.disconnected) return;
+        wakeT = setTimeout(() => { wakeT = null; if (peer.disconnected && !peer.destroyed) { try { peer.reconnect(); } catch (e) {} } }, 1200);
+      },
+      leave: async () => { dropFn = null; clearTimeout(wakeT); try { peer.destroy(); } catch (e) {} }
     };
-    peer.on('open', id => {
-      myLabel = id;
+    peer.on('open', () => {
+      if (settled) return; // 'open' fires again after reconnecting to the signalling server
       if (role === 'host') { settled = true; resolve(api); return; }
       const conn = peer.connect(hostId, { reliable: true, metadata: { by: net.myBy } });
-      const to = setTimeout(() => fail('not_found'), 10000);
+      const to = setTimeout(() => fail('timeout'), 12000);
       conn.on('open', () => {
-        if (settled) return;
+        if (settled) { try { conn.close(); } catch (e) {} return; }
         settled = true; clearTimeout(to);
+        byOf.set(conn.peer, null);
         conns.set(conn.peer, conn); wire(conn); resolve(api);
       });
       conn.on('error', () => {});
     });
     if (role === 'host') peer.on('connection', conn => {
       const b = conn.metadata && typeof conn.metadata.by === 'string' ? conn.metadata.by.slice(0, 40) : null;
-      byOf.set(conn.peer, b);
-      conn.on('open', () => { conns.set(conn.peer, conn); wire(conn); notify([pObj(conn.peer)], []); });
+      conn.on('open', () => {
+        byOf.set(conn.peer, b);
+        conns.set(conn.peer, conn); wire(conn);
+        peerL.forEach(f => f({ joined: [conn.peer], left: [] }));
+      });
     });
     peer.on('error', e => {
       const t = e && e.type;
-      if (t === 'peer-unavailable') fail('not_found');
-      else if (t === 'unavailable-id') fail('taken');
-      else if (!settled) fail(t || 'error');
+      if (!settled) { fail(t === 'peer-unavailable' ? 'not_found' : t === 'unavailable-id' ? 'taken' : t || 'error'); return; }
+      if (t !== 'peer-unavailable') api.wake();
     });
-    peer.on('disconnected', () => { if (!peer.destroyed) { try { peer.reconnect(); } catch (e) {} } });
+    peer.on('disconnected', () => api.wake());
   });
 }
 
-// --- host ---
+// ----- shared teardown -----
+function clearNet() {
+  net.gen++;
+  net.offs.forEach(f => { try { f(); } catch (e) {} }); net.offs = [];
+  net.timers.forEach(t => clearInterval(t)); net.timers = [];
+  if (net.tbl) { net.tbl.leave().catch(() => {}); net.tbl = null; }
+  net.code = null; net.players = []; net.phase = 'lobby'; net.lastState = 0; net.reconnecting = false;
+  keepAwake(false);
+  renderNetBanner();
+}
+function resetHandView() {
+  for (const el of handEls.values()) el.remove();
+  handEls.clear(); myOrder = []; pending.clear(); lastPlaySeq = 0; announcedOut = false;
+}
+function leaveTable() {
+  clearNet(); ss('durak-session', null); setHash(null); closeSheet(); mode = 'solo'; startSolo();
+}
+function saveNick() {
+  const i = document.getElementById('nickI');
+  if (i) { net.myNick = cleanNick(i.value); save('durak-nick', { v: net.myNick }); }
+  if (!net.myNick) {
+    toast('Type your name first so your friends know who you are.');
+    if (i) { i.focus(); i.classList.remove('shake'); void i.offsetWidth; i.classList.add('shake'); }
+    return false;
+  }
+  return true;
+}
+
+// ----- host -----
 function randomCode() {
   const a = 'abcdefghjkmnpqrstuvwxyz23456789';
   let c = ''; for (let i = 0; i < 4; i++) c += a[Math.floor(Math.random() * a.length)];
   return c;
 }
 async function hostTable() {
+  if (!saveNick()) return;
   clearNet();
-  saveNick();
-  let tbl, code;
-  for (let tries = 0; tries < 3 && !tbl; tries++) {
+  toast('Opening a table…', 9000);
+  let tbl = null, code, err = null;
+  for (let tries = 0; tries < 4 && !tbl; tries++) {
     code = randomCode();
-    try { tbl = await net.room.join('durak-' + code, 'host'); }
-    catch (e) { if (!(e && e.code === 'taken')) break; }
+    try { tbl = await joinP2P(code, 'host'); }
+    catch (e) { err = e; if (!(e && e.code === 'taken')) break; }
   }
-  if (!tbl) { toast("Couldn't open a table right now. Check your connection and try again."); return; }
-  clearTimeout(timer);
-  mode = 'host'; me = 0; net.tbl = tbl; net.code = code; net.phase = 'lobby';
-  net.players = [{ peer: myPeer(), by: net.myBy, nick: net.myNick, host: true }];
-  net.offs.push(tbl.on('hello', onHello, () => {}));
-  net.offs.push(tbl.on('act', onAct, () => {}));
-  net.offs.push(tbl.onPeers(onHostPeers, () => {}));
-  net.timers.push(setInterval(broadcast, 2000));
-  updateHostPresence();
-  showHostLobby(); render(); broadcast();
+  if (!tbl) { toast(netErr(err), 3200); return; }
+  hideToast();
+  becomeHost(tbl, code);
+  net.players = [{ by: net.myBy, nick: net.myNick, raw: net.myNick, host: true, live: true, seen: Date.now() }];
+  net.phase = 'lobby'; net.tally = {}; hostLastDurak = null;
+  showHostLobby(); render(); saveHostSession();
 }
-function updateHostPresence() {
-  if (!net.room || mode !== 'host') return;
-  net.room.presence({ host: net.phase === 'lobby' || net.players.length < 4 ? net.code : null, n: net.players.length }).catch(() => {});
+function becomeHost(tbl, code) {
+  clearTimeout(timer);
+  mode = 'host'; me = 0; net.tbl = tbl; net.code = code; net.gen++;
+  net.offs.push(tbl.on('hello', onHello), tbl.on('act', onAct), tbl.on('emo', onEmoMsg), tbl.onPeers(onHostPeers));
+  net.timers.push(setInterval(broadcast, 2000), setInterval(hostTick, 1000));
+  keepAwake(true);
+}
+function uniqueNick(nick, by) {
+  const taken = new Set(net.players.filter(p => p.by !== by).map(p => p.nick.toLowerCase()));
+  BOT_NAMES.forEach(b => taken.add(b.toLowerCase()));
+  const base = nick || 'Friend';
+  let n = base, k = 2;
+  while (taken.has(n.toLowerCase())) n = base + ' ' + k++;
+  return n;
 }
 function onHello(msg) {
-  if (msg.sameTab || mode !== 'host') return;
-  const nick = msg.data && typeof msg.data.nick === 'string' ? msg.data.nick.slice(0, 40) : '';
-  const before = JSON.stringify(net.players);
-  const known = net.players.find(p => p.peer === msg.peer) || (msg.by && net.players.find(p => p.by === msg.by && !peerHere(p.peer)));
-  if (known) { known.peer = msg.peer; if (nick) known.nick = nick; }
-  else if (net.players.length < 4) net.players.push({ peer: msg.peer, by: msg.by, nick });
-  const changed = before !== JSON.stringify(net.players);
-  if (net.phase === 'game' && G) {
-    const seat = seatInfo.findIndex(s => s.k === 'hu' && (s.peer === msg.peer || (msg.by && s.by === msg.by && s.gone)));
-    if (seat > 0 && (seatInfo[seat].gone || seatInfo[seat].peer !== msg.peer)) {
-      seatInfo[seat].peer = msg.peer; seatInfo[seat].gone = false;
-      if (!G.over) { G.humans[seat] = true; toast(`${seatName(seat)} is back.`); Hooks.schedule('think'); }
+  if (mode !== 'host') return;
+  const d = msg.data || {};
+  const by = msg.by || (typeof d.by === 'string' ? d.by.slice(0, 40) : null);
+  if (!by || by === net.myBy) return;
+  const nick = cleanNick(d.nick);
+  const now = Date.now();
+  let pl = net.players.find(p => p.by === by), changed = false;
+  if (!pl && net.phase === 'game' && G && nick) {
+    // Same friend on a fresh tab (new id): hand their empty seat back to them.
+    const s = seatInfo.findIndex((x, i) => i > 0 && x.k === 'hu' && x.gone && (x.raw || x.nick).toLowerCase() === nick.toLowerCase());
+    if (s > 0) {
+      const old = net.players.find(p => p.by === seatInfo[s].by);
+      if (old) { old.by = by; pl = old; }
+      seatInfo[s].by = by; changed = true;
     }
   }
-  if (changed) { updateHostPresence(); if (sheetKind === 'host') showHostLobby(); render(); }
-  broadcast();
+  if (!pl) {
+    if (net.players.length >= 4) { net.tbl.sendTo(msg.peer, 'full', {}); return; }
+    pl = { by, raw: nick, nick: uniqueNick(nick, by), peer: msg.peer, seen: now };
+    net.players.push(pl); changed = true;
+    toast(`${pl.nick} joined the table.`);
+  }
+  if (pl.peer !== msg.peer) { if (pl.peer) net.tbl.drop(pl.peer); pl.peer = msg.peer; changed = true; }
+  if (nick && pl.raw !== nick) {
+    pl.raw = nick; pl.nick = uniqueNick(nick, by); changed = true;
+    const s = seatOf(by); if (s > 0) { seatInfo[s].nick = pl.nick; seatInfo[s].raw = nick; }
+  }
+  pl.seen = now;
+  hostTick();
+  if (changed) { refreshHostViews(); broadcast(); }
 }
-function peerHere(peer) { return !!(net.tbl && net.tbl.peers().some(p => p.peer === peer)); }
 function onHostPeers(ch) {
   if (mode !== 'host') return;
-  for (const lp of ch.left) {
-    if (lp.sameTab) continue;
-    const i = net.players.findIndex(p => p.peer === lp.peer && !p.host);
-    if (i >= 0) net.players.splice(i, 1);
-    if (net.phase === 'game' && G) {
-      const seat = seatInfo.findIndex(s => s.k === 'hu' && s.peer === lp.peer);
-      if (seat > 0 && !seatInfo[seat].gone) {
-        seatInfo[seat].gone = true;
-        if (!G.over) { G.humans[seat] = false; toast(`${seatName(seat).replace(' (bot)', '')} left. A bot is playing for them.`, 2600); Hooks.schedule('think'); }
-      }
-    }
+  for (const id of ch.left) { const p = net.players.find(x => x.peer === id); if (p) p.peer = null; }
+  hostTick();
+}
+function hostTick() {
+  if (mode !== 'host' || !net.tbl) return;
+  const now = Date.now();
+  let changed = false;
+  for (const p of net.players) {
+    if (p.host) continue;
+    const live = !!p.peer && net.tbl.has(p.peer) && now - p.seen < 7000;
+    if (live !== !!p.live) { p.live = live; changed = true; }
   }
-  updateHostPresence();
+  if (net.phase === 'lobby') {
+    const keep = net.players.filter(p => p.host || p.live || now - p.seen < 15000 || now < (p.grace || 0));
+    if (keep.length !== net.players.length) { net.players = keep; changed = true; }
+  }
+  if (net.phase === 'game' && G) {
+    seatInfo.forEach((s, i) => {
+      if (i === 0 || s.k !== 'hu') return;
+      const pl = net.players.find(p => p.by === s.by);
+      const live = !!(pl && (pl.live || now < (pl.grace || 0)));
+      if (!live && !s.gone) {
+        s.gone = true; changed = true;
+        if (!G.over) { G.humans[i] = false; toast(`${s.nick} lost connection. A bot plays for them until they're back.`, 2800); Hooks.schedule('quick'); }
+      } else if (live && s.gone) {
+        s.gone = false; changed = true;
+        if (!G.over) { G.humans[i] = true; if (G.afk) G.afk[i] = false; toast(`${s.nick} is back.`); Hooks.schedule('quick'); }
+      }
+    });
+  }
+  if (changed) { refreshHostViews(); broadcastSoon(); }
+}
+function refreshHostViews() {
   if (sheetKind === 'host') showHostLobby();
-  render(); broadcastSoon();
+  render();
 }
 function onAct(msg) {
-  if (mode !== 'host' || !G || G.over || msg.sameTab) return;
-  const seat = seatInfo.findIndex(s => s.k === 'hu' && s.peer === msg.peer && !s.gone);
-  if (seat <= 0 || !G.humans[seat]) return;
+  if (mode !== 'host' || !G || G.over) return;
   const d = msg.data || {};
+  const by = msg.by || d.by;
+  const pl = net.players.find(p => p.by === by);
+  if (pl) { pl.seen = Date.now(); if (pl.peer !== msg.peer) { if (pl.peer) net.tbl.drop(pl.peer); pl.peer = msg.peer; } }
+  const seat = seatOf(by);
   const id = Number.isInteger(d.id) && d.id >= 0 && d.id < 36 ? d.id : null;
+  const nack = () => net.tbl.sendTo(msg.peer, 'nack', { id });
+  if (seat <= 0 || (d.gid != null && d.gid !== gid)) { nack(); return; }
+  if (seatInfo[seat].gone) hostTick();
+  if (!G.humans[seat]) { nack(); return; }
   const slot = Number.isInteger(d.s) ? d.s : null;
-  if (d.t === 'p' && id != null) humanPlay(seat, id, slot);
-  else if (d.t === 'x' && id != null) humanTransfer(seat, id);
-  else if (d.t === 'k') humanTake(seat);
+  let ok = false;
+  if (d.t === 'p' && id != null) ok = humanPlay(seat, id, slot);
+  else if (d.t === 'x' && id != null) ok = humanTransfer(seat, id);
+  else if (d.t === 'k') ok = humanTake(seat);
+  if (!ok) nack();
   broadcastSoon();
+}
+function onEmoMsg(msg) {
+  if (mode !== 'host') return;
+  const e = msg.data && msg.data.e;
+  const s = seatOf(msg.by);
+  if (s > 0 && EMOJIS.includes(e)) relayEmote(s, e);
+}
+function relayEmote(s, e) {
+  const now = Date.now();
+  if (now - (net.emoAt[s] || 0) < 900) return;
+  net.emoAt[s] = now;
+  showEmote(s, e);
+  for (const p of net.players) if (!p.host && p.peer) net.tbl.sendTo(p.peer, 'emo', { s, e, gid });
 }
 let bcastT = null;
 function broadcastSoon() { if (mode !== 'host' || !net.tbl || bcastT) return; bcastT = setTimeout(() => { bcastT = null; broadcast(); }, 40); }
+function seatPublic() { return seatInfo.map(s => s.k === 'bot' ? { k: 'bot', nm: s.nm } : { k: 'hu', by: s.by, nick: s.nick, gone: !!s.gone }); }
+function playersPublic() { return net.players.map(p => ({ by: p.by, nick: p.nick, host: !!p.host, live: !!(p.host || p.live) })); }
+function tallyList() { return Object.values(net.tally).sort((a, b) => a.d - b.d || b.g - a.g || a.nm.localeCompare(b.nm)); }
 function broadcast() {
   if (mode !== 'host' || !net.tbl) return;
-  let data;
-  if (net.phase === 'lobby' || !G) data = { ph: 'lobby', code: net.code, pl: net.players.map(p => ({ peer: p.peer, by: p.by, nick: p.nick })), seats: Math.max(settings.seats, net.players.length), gid };
-  else data = snapshot({ ph: 'game', gid, si: seatInfo, dlm: G.deadline ? Math.max(0, G.deadline - Date.now()) : null, wl: G.winLen || 0, pl2: net.players.map(p => ({ peer: p.peer, by: p.by, nick: p.nick })) });
-  net.tbl.emit('state', data).catch(() => {});
+  const pl = playersPublic(), ty = tallyList();
+  const inGame = net.phase === 'game' && G;
+  const si = inGame ? seatPublic() : null;
+  for (const p of net.players) {
+    if (p.host || !p.peer) continue;
+    const data = inGame
+      ? snapshot({ ph: 'game', gid, code: net.code, si, pl2: pl, ty, dlm: G.deadline ? Math.max(0, G.deadline - Date.now()) : null, wl: G.winLen || 0 }, seatOf(p.by))
+      : { ph: 'lobby', code: net.code, pl, seats: Math.max(settings.seats, net.players.length), gid, ty };
+    net.tbl.sendTo(p.peer, 'state', data);
+  }
+  saveHostSession();
+}
+function saveHostSession() {
+  if (mode !== 'host' || !net.code) return;
+  ss('durak-session', {
+    role: 'host', code: net.code, at: Date.now(), phase: net.phase, gid, last: hostLastDurak, tally: net.tally, myOrder,
+    players: net.players.map(p => ({ by: p.by, nick: p.nick, raw: p.raw, host: !!p.host })),
+    seatInfo: net.phase === 'game' ? seatInfo : null, g: net.phase === 'game' && G ? dumpG() : null
+  });
+}
+async function restoreHost(s) {
+  toast('Reopening your table…', 30000);
+  const t0 = Date.now();
+  let tbl = null;
+  while (!tbl) {
+    try { tbl = await joinP2P(s.code, 'host'); }
+    catch (e) {
+      if (e && e.code === 'taken' && Date.now() - t0 < 30000) { await sleep(2000); continue; }
+      ss('durak-session', null);
+      toast("Couldn't reopen your table. Host a new one from Friends.", 3500);
+      return;
+    }
+  }
+  hideToast();
+  becomeHost(tbl, s.code);
+  gid = s.gid || 0; net.tally = s.tally || {}; hostLastDurak = s.last || null;
+  const grace = Date.now() + 20000; // give friends time to reconnect before bots step in
+  net.players = (s.players || []).map(p => Object.assign({}, p, { seen: Date.now(), grace, live: !!p.host }));
+  if (!net.players.length || !net.players[0].host) net.players.unshift({ by: net.myBy, nick: net.myNick, raw: net.myNick, host: true, live: true, seen: Date.now() });
+  if (s.g && s.seatInfo) {
+    resetHandView();
+    seatInfo = s.seatInfo; G = loadG(s.g); me = 0; myOrder = s.myOrder || [];
+    G.winSig = null; G.deadline = null; G.turnSig = null; G.turnDeadline = null;
+    net.phase = 'game';
+    closeSheet(); render();
+    if (G.over) showResult(); else { toast('Table reopened. Waiting for everyone to reconnect…', 2600); Hooks.schedule('think'); }
+  } else {
+    net.phase = 'lobby'; showHostLobby(); render();
+  }
+  broadcast();
 }
 function showHostLobby() {
   const ppl = net.players;
@@ -1590,33 +1757,58 @@ function showHostLobby() {
   const rows = [];
   for (let i = 0; i < total; i++) {
     const p = ppl[i];
-    rows.push(p ? `<div class="seatrow"><span class="av hu">${esc(((p.by && profileNames[p.by]) || p.nick || '?')[0])}</span><span>${esc(p.host ? 'You (host)' : (p.by && profileNames[p.by]) || p.nick || 'Friend')}</span></div>`
-      : `<div class="seatrow bot"><span class="av">${BOT_NAMES[i - ppl.length] ? BOT_NAMES[i - ppl.length][0] : 'B'}</span><span>Bot · ${BOT_NAMES[(i - ppl.length) % 4]}</span></div>`);
+    if (p) {
+      const nm0 = p.host ? 'You (host)' : p.nick;
+      const st = p.host ? '' : p.live ? '<span class="live-dot" title="Connected"></span>' : '<span class="muted small-p">connecting…</span>';
+      rows.push(`<div class="seatrow"><span class="av hu">${esc((p.nick || '?')[0])}</span><span class="grow">${esc(nm0)}</span>${st}</div>`);
+    } else {
+      const bn = BOT_NAMES[(i - ppl.length) % 4];
+      rows.push(`<div class="seatrow bot"><span class="av">${bn[0]}</span><span class="grow">Bot · ${bn}</span><span class="muted small-p">open seat</span></div>`);
+    }
   }
   const inGame = net.phase === 'game' && G && !G.over;
   openSheet(`<h2>Your table</h2>
-    <div class="codebox"><small>Table code</small><b>${net.code.toUpperCase()}</b><span>${net.kind === 'p2p' ? 'Friends open this same link, tap Friends, and type this code.' : 'Friends tap Friends, then join your table or type this code.'}</span></div>
+    <div class="codebox"><small>Table code</small><b>${net.code.toUpperCase()}</b><span>Send friends the invite link, or have them tap Friends and type this code.</span></div>
+    <button class="btn ghost wide" id="inviteB" style="margin-top:10px">${navigator.share ? 'Share invite link' : 'Copy invite link'}</button>
     <div class="lbl">Seats</div><div class="seats">${rows.join('')}</div>
     ${inGame ? '' : `<div class="lbl">Players at the table</div>${seg('seats', [2, 3, 4].map(n => [n, n + ' seats', n < ppl.length]), total)}`}
     <div class="lbl">Bot speed</div>${seg('speed', [['relaxed', 'Slow'], ['normal', 'Human'], ['fast', 'Quick']])}
+    ${tallyHTML()}
     <div class="row"><button class="btn ghost" id="closeT">Close table</button>${inGame ? `<button class="btn primary" id="backB">Back to game</button>` : `<button class="btn primary" id="startB">Deal</button>`}</div>`, 'host');
   wireSegs(k => { if (k === 'seats') { showHostLobby(); broadcast(); } });
+  $('#inviteB').onclick = shareInvite;
   $('#closeT').onclick = leaveTable;
   if (inGame) $('#backB').onclick = closeSheet; else $('#startB').onclick = () => { closeSheet(); hostStart(); };
+}
+async function shareInvite() {
+  const url = inviteUrl();
+  if (navigator.share) {
+    try { await navigator.share({ title: 'Durak', text: `Play Durak with me! Table ${net.code.toUpperCase()}`, url }); return; }
+    catch (e) { if (e && e.name === 'AbortError') return; }
+  }
+  try { await navigator.clipboard.writeText(url); toast('Invite link copied. Paste it to your friends.'); }
+  catch (e) { toast(url, 5000); }
+}
+function tallyHTML() {
+  const t = mode === 'host' ? tallyList() : (net.tallyList || []);
+  if (!t.length) return '';
+  return `<div class="lbl">Times durak at this table</div><div class="tally">${t.map(x => `<div><span>${esc(x.nm)}</span><b>${x.d}</b></div>`).join('')}</div>`;
 }
 function hostToLobby() {
   clearTimeout(timer);
   net.phase = 'lobby';
-  updateHostPresence();
   showHostLobby(); broadcast();
 }
 function hostStart() {
   clearTimeout(timer);
+  const now = Date.now();
+  net.players = net.players.filter(p => p.host || p.live || now < (p.grace || 0));
+  net.players[0].nick = net.myNick;
   const ppl = net.players.slice(0, 4);
   const total = Math.max(2, settings.seats, ppl.length);
   seatInfo = []; const humans = [];
   for (let i = 0; i < total; i++) {
-    if (i < ppl.length) { seatInfo.push({ k: 'hu', peer: i === 0 ? myPeer() : ppl[i].peer, by: ppl[i].by, nick: ppl[i].nick }); humans.push(true); }
+    if (i < ppl.length) { seatInfo.push({ k: 'hu', by: ppl[i].by, nick: ppl[i].nick, raw: ppl[i].raw }); humans.push(true); }
     else { seatInfo.push({ k: 'bot', nm: BOT_NAMES[(i - ppl.length) % 4] }); humans.push(false); }
   }
   let fd = null;
@@ -1625,49 +1817,109 @@ function hostStart() {
   resetHandView();
   newGame({ players: total, humans, firstDefender: fd });
   net.phase = 'game';
-  updateHostPresence();
   render(); broadcast();
   toast(introText(G.introData), 3600);
   Hooks.schedule('think');
 }
 
-// --- friend ---
-async function joinTable(code) {
+// ----- friend -----
+async function joinTable(code, resume) {
+  if (!resume && !saveNick()) return;
   clearNet();
-  saveNick();
-  let tbl;
-  toast('Connecting to table ' + code.toUpperCase() + '…', 9000);
-  try { tbl = await net.room.join('durak-' + code, 'client'); }
-  catch (e) { toast(e && e.code === 'not_found' ? `No table with code ${code.toUpperCase()}. Check it with your friend.` : e && e.code === 'no_lib' ? "Couldn't load the connection library. Check your internet." : "Couldn't reach that table. Try again."); return; }
-  toast('Connected!', 1200);
   clearTimeout(timer);
-  mode = 'client'; me = -1; net.tbl = tbl; net.code = code; net.hostPeer = null; net.phase = 'joining'; net.lastState = Date.now();
-  net.offs.push(tbl.on('state', onState, () => {}));
-  net.offs.push(tbl.onPeers(ch => { if (net.hostPeer && ch.left.some(p => p.peer === net.hostPeer)) hostGone(); }, () => {}));
-  const hello = () => tbl.emit('hello', { nick: net.myNick }).catch(e => {
-    if (e && e.code === 'not_permitted') { clearNet(); mode = 'solo'; openSheet(`<h2>Ask for edit access</h2><p>Your access to this page is view-only, so your moves can't reach the table. Ask the host to share the page with you with edit access, then reopen it.</p><div class="row"><button class="btn primary" id="okB">OK</button></div>`); $('#okB').onclick = () => { closeSheet(); startSolo(); }; }
-  });
-  hello();
-  net.timers.push(setInterval(hello, 3000));
-  net.timers.push(setInterval(() => { if (mode === 'client' && Date.now() - net.lastState > 12000) hostGone(net.phase === 'joining'); }, 2000));
+  mode = 'client'; me = -1; net.code = code; net.phase = 'joining'; net.players = []; net.lastState = 0;
+  ss('durak-session', { role: 'client', code, at: Date.now() });
+  setHash(code);
+  keepAwake(true);
+  net.timers.push(setInterval(sendHello, 2000));
+  net.timers.push(setInterval(() => {
+    if (mode === 'client' && net.tbl && !net.reconnecting && net.phase !== 'joining' && Date.now() - net.lastState > 7000) startReconnect();
+  }, 1000));
   showClientLobby();
+  if (resume) { startReconnect(); return; }
+  const gen = net.gen;
+  const err = await clientConnect();
+  if (gen !== net.gen || mode !== 'client') return;
+  if (err) {
+    const msg = netErr(err);
+    clearNet(); ss('durak-session', null); setHash(null); mode = 'solo';
+    showFriends(); toast(msg, 3600);
+    return;
+  }
+  // connected: the host answers our hello with the table state
+  const t0 = Date.now();
+  while (gen === net.gen && mode === 'client' && !net.lastState && Date.now() - t0 < 6000) await sleep(200);
+  if (gen === net.gen && mode === 'client' && !net.lastState) startReconnect();
+}
+async function clientConnect() {
+  const gen = net.gen;
+  let tbl;
+  try { tbl = await joinP2P(net.code, 'client'); }
+  catch (e) { return e || { code: 'error' }; }
+  if (gen !== net.gen || mode !== 'client') { tbl.leave(); return { code: 'stale' }; }
+  if (net.tbl) net.tbl.leave().catch(() => {});
+  net.offs.forEach(f => { try { f(); } catch (e) {} }); net.offs = [];
+  net.tbl = tbl;
+  net.offs.push(tbl.on('state', onState), tbl.on('nack', onNack), tbl.on('emo', onEmoEvt), tbl.on('full', onFull));
+  tbl.onDrop(() => { if (net.tbl === tbl) startReconnect(); });
+  sendHello();
+  return null;
+}
+function sendHello() { if (mode === 'client' && net.tbl) net.tbl.emit('hello', { nick: net.myNick, by: net.myBy }).catch(() => {}); }
+async function startReconnect() {
+  if (mode !== 'client' || net.reconnecting) return;
+  const gen = net.gen;
+  net.reconnecting = true; net.recSince = Date.now(); net.lastState = 0;
+  if (net.tbl) { const t = net.tbl; net.tbl = null; t.leave().catch(() => {}); }
+  renderNetBanner();
+  while (gen === net.gen && mode === 'client' && net.reconnecting) {
+    const err = await clientConnect();
+    if (gen !== net.gen || mode !== 'client') return;
+    if (!err) {
+      const t0 = Date.now();
+      while (gen === net.gen && net.reconnecting && Date.now() - t0 < 4000) await sleep(150);
+      if (gen !== net.gen || !net.reconnecting) return;
+      if (net.tbl) { const t = net.tbl; net.tbl = null; t.leave().catch(() => {}); }
+    }
+    if (Date.now() - net.recSince > 90000) { hostGone(net.phase === 'joining'); return; }
+    await sleep(2500);
+  }
 }
 function hostGone(neverFound) {
-  clearNet(); mode = 'solo';
-  openSheet(`<h2>${neverFound ? 'Table not found' : 'The host left'}</h2><p>${neverFound ? 'Nobody is hosting a table with that code right now. Check the code with your friend.' : 'The table closed because the host left or lost connection.'}</p><div class="row"><button class="btn ghost" id="frB">Friends</button><button class="btn primary" id="okB">Play vs bots</button></div>`, 'gone');
+  clearNet(); ss('durak-session', null); setHash(null); mode = 'solo';
+  openSheet(`<h2>${neverFound ? 'Table not found' : 'Lost the table'}</h2><p>${neverFound ? 'Nobody is hosting a table with that code right now. Check the code with your friend.' : "Couldn't reach the host for a while. They may have closed the table or lost connection."}</p><div class="row"><button class="btn ghost" id="frB">Friends</button><button class="btn primary" id="okB">Play vs bots</button></div>`, 'gone');
   $('#okB').onclick = () => { closeSheet(); startSolo(); };
   $('#frB').onclick = showFriends;
 }
+function onFull() {
+  clearNet(); ss('durak-session', null); setHash(null); mode = 'solo';
+  openSheet(`<h2>Table is full</h2><p>That table already has 4 players.</p><div class="row"><button class="btn primary" id="okB">Play vs bots</button></div>`, 'gone');
+  $('#okB').onclick = () => { closeSheet(); startSolo(); };
+}
+function onNack(msg) {
+  const id = msg.data && msg.data.id;
+  if (id == null) return;
+  pending.delete(id); dropRects.delete(id);
+  render();
+  const el = handEls.get(id);
+  if (el) { el.classList.remove('shake'); void el.offsetWidth; el.classList.add('shake'); }
+  toast((me >= 0 && G && whyNot(me, id)) || "That card didn't go through. Try again.");
+}
+function onEmoEvt(msg) {
+  const d = msg.data || {};
+  if (d.gid === gid && d.s !== me && EMOJIS.includes(d.e)) showEmote(d.s, d.e);
+}
 function onState(msg) {
-  if (mode !== 'client' || msg.sameTab) return;
+  if (mode !== 'client') return;
   const x = msg.data;
   if (!x || typeof x !== 'object') return;
-  if (net.hostPeer && msg.peer !== net.hostPeer) return;
-  net.hostPeer = msg.peer; net.lastState = Date.now();
+  net.lastState = Date.now();
+  if (net.reconnecting) { net.reconnecting = false; renderNetBanner(); }
+  if (!net.lastSave || net.lastState - net.lastSave > 10000) { net.lastSave = net.lastState; ss('durak-session', { role: 'client', code: net.code, at: net.lastState }); }
+  net.tallyList = Array.isArray(x.ty) ? x.ty : [];
   if (x.ph === 'lobby') {
     net.phase = 'lobby'; net.players = Array.isArray(x.pl) ? x.pl : []; net.seats = x.seats || 4;
-    if (G && !G.over && sheetKind !== 'client') { /* host went back to the table screen */ }
-    if (sheetKind === 'client' || sheetKind === 'result' || !G || sheetKind == null) showClientLobby();
+    if (sheetKind === 'client' || sheetKind === 'result' || sheetKind == null) showClientLobby();
     return;
   }
   if (x.ph !== 'game') return;
@@ -1677,8 +1929,7 @@ function onState(msg) {
   if (fresh) { resetHandView(); gid = x.gid; }
   seatInfo = Array.isArray(x.si) ? x.si : [];
   net.players = Array.isArray(x.pl2) ? x.pl2 : net.players;
-  const mp = myPeer();
-  me = seatInfo.findIndex(s => s.k === 'hu' && ((mp && s.peer === mp) || (net.myBy && s.by === net.myBy)));
+  me = seatOf(net.myBy);
   G = fromSnapshot(x);
   G.deadline = x.dlm != null ? Date.now() + x.dlm : null; G.winLen = x.wl;
   if (me >= 0) for (const [id, at] of pending) if (!G.hands[me].includes(id) || Date.now() - at > 2500) pending.delete(id);
@@ -1689,33 +1940,130 @@ function onState(msg) {
     dropRects.delete(pl.id);
   }
   lastPlaySeq = Math.max(lastPlaySeq, ...G.plays.map(p => p.q), 0);
+  const wasJoining = net.phase !== 'game';
   net.phase = 'game';
   if (fresh) { if (sheetKind === 'client' || sheetKind === 'result') closeSheet(); toast(introText(G.introData), 3600); }
+  else if (wasJoining && sheetKind === 'client') closeSheet();
   render();
   if (!fresh && prev && !prev.over && G.over) gameOverLocal();
+  if (G.over && sheetKind == null && fresh) showResult();
 }
 function showClientLobby() {
   const ppl = net.players || [];
   const total = Math.max(net.seats || 4, ppl.length);
-  const mp = myPeer();
   const rows = [];
   for (let i = 0; i < total; i++) {
     const p = ppl[i];
     if (p) {
-      const isMe = (mp && p.peer === mp) || (net.myBy && p.by === net.myBy);
-      const name = isMe ? 'You' : ((p.by && profileNames[p.by]) || p.nick || 'Friend') + (i === 0 ? ' (host)' : '');
-      rows.push(`<div class="seatrow"><span class="av hu">${esc(name[0])}</span><span>${esc(name)}</span></div>`);
-    } else rows.push(`<div class="seatrow bot"><span class="av">B</span><span>Bot</span></div>`);
+      const isMe = p.by === net.myBy;
+      const name = isMe ? 'You' : (p.nick || 'Friend') + (p.host ? ' (host)' : '');
+      rows.push(`<div class="seatrow"><span class="av hu">${esc((p.nick || '?')[0])}</span><span class="grow">${esc(name)}</span>${!isMe && !p.live ? '<span class="muted small-p">connecting…</span>' : ''}</div>`);
+    } else rows.push(`<div class="seatrow bot"><span class="av">B</span><span class="grow">Bot</span><span class="muted small-p">open seat</span></div>`);
   }
   const joining = net.phase === 'joining';
   const inGame = net.phase === 'game' && G && !G.over;
+  const host = ppl.find(p => p.host);
   openSheet(`<h2>${joining ? 'Joining table…' : 'Table ' + esc((net.code || '').toUpperCase())}</h2>
-    ${joining ? `<p class="muted">Looking for table ${esc((net.code || '').toUpperCase())}…</p>` : `<div class="seats">${rows.join('')}</div>
-    <p class="muted">${inGame ? (me >= 0 ? 'Game in progress.' : "A game is in progress. You'll be dealt in next game.") : `Waiting for ${esc(ppl[0] ? ((ppl[0].by && profileNames[ppl[0].by]) || ppl[0].nick || 'the host') : 'the host')} to deal…`}</p>`}
+    ${joining ? `<p class="muted">Connecting to table ${esc((net.code || '').toUpperCase())}…</p>` : `<div class="seats">${rows.join('')}</div>
+    <p class="muted">${inGame ? (me >= 0 ? 'Game in progress.' : "A game is in progress. You'll be dealt in next game.") : `Waiting for ${esc(host ? host.nick : 'the host')} to deal…`}</p>${tallyHTML()}`}
     <div class="row"><button class="btn ghost" id="leaveB">Leave table</button>${inGame ? `<button class="btn primary" id="backB">Back to game</button>` : ''}</div>`, 'client');
   $('#leaveB').onclick = leaveTable;
   if (inGame) $('#backB').onclick = closeSheet;
 }
+
+// ----- friends sheet -----
+function nickField() {
+  return `<div class="lbl">Your name</div>
+    <input id="nickI" class="textin" maxlength="16" autocomplete="nickname" placeholder="Your name" value="${esc(net.myNick)}" aria-label="Your name">`;
+}
+function showFriends() {
+  openSheet(`<h2>Play with friends</h2>${nickField()}
+    <div style="height:12px"></div>
+    <button class="btn primary wide" id="hostB">Host a table</button>
+    <div class="lbl">Join a friend's table</div>
+    <form id="codeF" class="codeform"><input id="codeI" maxlength="4" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="ABCD" aria-label="Table code"><button class="btn ghost" type="submit">Join</button></form>
+    <p class="muted small-p">The host taps Host a table and sends the invite link. Everyone plays on their own phone. If a school or work Wi-Fi blocks the connection, switch to mobile data.</p>
+    <div class="row"><button class="btn ghost" id="closeB">Back to bots</button></div>`, 'friends');
+  loadPeerJS().catch(() => {});
+  $('#closeB').onclick = closeSheet;
+  $('#hostB').onclick = hostTable;
+  $('#codeF').onsubmit = e => {
+    e.preventDefault();
+    const c = $('#codeI').value.trim().toLowerCase();
+    if (/^[a-z0-9]{4}$/.test(c)) joinTable(c); else toast('Codes are 4 letters or numbers.');
+  };
+}
+function showJoinPrompt(code) {
+  if (mode === 'solo') clearTimeout(timer);
+  openSheet(`<h2>Join table ${esc(code.toUpperCase())}</h2>
+    <p class="muted" style="margin-top:0">A friend invited you to play Durak.</p>${nickField()}
+    <div style="height:14px"></div>
+    <button class="btn primary wide" id="joinB">Join table</button>
+    <div class="row"><button class="btn ghost" id="soloB">Play vs bots instead</button></div>`, 'join');
+  loadPeerJS().catch(() => {});
+  $('#joinB').onclick = () => joinTable(code);
+  $('#soloB').onclick = () => { setHash(null); closeSheet(); if (mode === 'solo' && G && !G.over) Hooks.schedule('think'); };
+  const i = $('#nickI');
+  i.addEventListener('keydown', e => { if (e.key === 'Enter') joinTable(code); });
+  if (!net.myNick) setTimeout(() => i.focus(), 300);
+}
+
+// ----- emotes -----
+function showEmote(seat, e) {
+  let x, y;
+  if (seat === me) { const b = $('#hand').getBoundingClientRect(); x = b.left + b.width / 2; y = b.top; }
+  else {
+    const o = document.getElementById('opp-' + seat); if (!o) return;
+    const b = o.getBoundingClientRect(); x = b.left + b.width / 2; y = b.top + b.height * 0.55;
+  }
+  const el = document.createElement('div');
+  el.className = 'emo'; el.textContent = e;
+  el.style.left = x + 'px'; el.style.top = y + 'px';
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 2300);
+}
+function sendEmote(e) {
+  $('#emoPop').classList.remove('show');
+  if (mode === 'host') relayEmote(0, e);
+  else if (mode === 'client' && net.tbl && me >= 0) {
+    const now = Date.now();
+    if (now - (net.emoAt.me || 0) < 900) return;
+    net.emoAt.me = now;
+    showEmote(me, e);
+    net.tbl.emit('emo', { e }).catch(() => {});
+  }
+}
+$('#emoPop').innerHTML = EMOJIS.map(e => `<button aria-label="Send ${e}">${e}</button>`).join('');
+$('#emoPop').addEventListener('click', e => { const b = e.target.closest('button'); if (b) sendEmote(b.textContent); });
+$('#emoBtn').onclick = e => { e.stopPropagation(); $('#emoPop').classList.toggle('show'); };
+document.addEventListener('pointerdown', e => { if (!e.target.closest('#emoPop, #emoBtn')) $('#emoPop').classList.remove('show'); });
+
+// ----- connection banner -----
+function renderNetBanner() {
+  const b = $('#netBanner');
+  let msg = '';
+  if (mode === 'client' && net.reconnecting && net.phase !== 'joining') msg = 'Reconnecting to the table…';
+  else if (mode === 'host' && net.phase === 'game' && G && !G.over) {
+    const away = seatInfo.filter((s, i) => i > 0 && s.k === 'hu' && s.gone).map(s => s.nick);
+    if (away.length) msg = `${listNames(away)} ${away.length > 1 ? 'are' : 'is'} offline. A bot plays for them until they're back.`;
+  }
+  b.textContent = msg;
+  b.classList.toggle('show', !!msg);
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible') return;
+  if (mode !== 'solo') keepAwake(true);
+  if (mode === 'host' && net.tbl) { net.tbl.wake(); hostTick(); broadcast(); }
+  if (mode === 'client') {
+    if (!net.reconnecting && net.phase !== 'joining' && (!net.tbl || Date.now() - net.lastState > 3500)) startReconnect();
+    else sendHello();
+  }
+});
+window.addEventListener('hashchange', () => {
+  const c = hashCode();
+  if (c && !(mode === 'client' && net.code === c) && !(mode === 'host' && net.code === c)) showJoinPrompt(c);
+});
 
 // ----- solo -----
 let lastDurak = load('durak-last', { p: null, n: 0 });
@@ -1734,8 +2082,15 @@ function startSolo() {
 }
 if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => G && layoutHand(myHand()));
 startSolo();
-initNet();
-if (!load('durak-seen', { v: 0 }).v) { save('durak-seen', { v: 1 }); setTimeout(showRules, 400); }
+setInterval(() => { if (G && !G.over && G.turnDeadline) renderBar(); }, 1000);
+(function boot() {
+  const sess = ss('durak-session'), hc = hashCode();
+  const fresh = sess && Date.now() - (sess.at || 0) < SESSION_MAX;
+  if (fresh && sess.role === 'host' && (!hc || hc === sess.code)) { restoreHost(sess); return; }
+  if (fresh && sess.role === 'client' && (!hc || hc === sess.code)) { joinTable(sess.code, true); return; }
+  if (hc) { save('durak-seen', { v: 1 }); showJoinPrompt(hc); return; }
+  if (!load('durak-seen', { v: 0 }).v) { save('durak-seen', { v: 1 }); setTimeout(showRules, 400); }
+})();
 
 </script>
 </body>
