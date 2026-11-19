@@ -248,8 +248,8 @@ const S = id => Math.floor(id / 9);
 const R = id => id % 9;
 let G = null;
 const MAX_BOUT = 5;
-const Hooks = {
-  now() { return Date.now(); }, windowMs() { return 4000; }, turnMs(p) { return 0; },
+let Hooks = {
+  now() { return Date.now(); }, windowMs() { return 4000; }, turnMs(p) { return 0; }, level(p) { return 'normal'; },
   name(p) { return 'P' + p; },
   render() {}, schedule(ms) {}, onPlay(p, id, kind, i) {}, beforeClear(took) {}, onOver() {}
 };
@@ -543,7 +543,7 @@ function pBeat(c, def, pool) {
   for (let i = 0; i < k; i++) { if (U - i <= 0) { pn = 0; break; } pn *= Math.max(0, U - b - i) / (U - i); }
   return 1 - pn;
 }
-function botLead(p) {
+function normLead(p) {
   const sv = solveEndgame(p);
   if (sv && sv.type === 'throw' && sv.v >= 0) return [sv.card];
   const h = G.hands[p], def = G.defender, end = G.deck.length === 0;
@@ -562,7 +562,7 @@ function botLead(p) {
   }
   return cards.slice(0, Math.max(1, Math.min(G.boutLimit, G.hands[def].length)));
 }
-function botThrow(p) {
+function normThrow(p) {
   const sv = solveEndgame(p);
   if (sv && sv.v >= 0) return sv.type === 'throw' ? [sv.card] : [];
   const def = G.defender, end = G.deck.length === 0, h = G.hands[p];
@@ -597,12 +597,13 @@ function defenseCost(plan) {
   for (const [, c] of plan) cost += isTrump(c) ? 5 + R(c) * 1.5 : 0.3 * val(c);
   return cost;
 }
-function botDefend(p) {
+// Normal defender: returns one action {t:'b', slot, card} beat | {t:'x', card} pass on | {t:'k'} take
+function normDefend(p) {
   let sv = solveEndgame(p);
   if (sv && sv.v >= 0) {
-    if (sv.type === 'transfer') { transfer(p, sv.card); return; }
-    if (sv.type === 'beat' && defendCard(sv.slot, sv.card)) return;
-    if (sv.type === 'take') { take(p); return; }
+    if (sv.type === 'transfer') return { t: 'x', card: sv.card };
+    if (sv.type === 'beat') return { t: 'b', slot: sv.slot, card: sv.card };
+    if (sv.type === 'take') return { t: 'k' };
   }
   const h = G.hands[p], end = G.deck.length === 0;
   const un = G.table.map((pr, i) => ({ i, a: pr.a })).filter(o => G.table[o.i].d == null);
@@ -613,9 +614,9 @@ function botDefend(p) {
   if (xs.length) {
     const x = xs[0];
     const xCost = isTrump(x) ? 5 + R(x) * 1.5 : 0;
-    if (!plan || !isTrump(x) || defenseCost(plan) >= xCost) { transfer(p, x); return; }
+    if (!plan || !isTrump(x) || defenseCost(plan) >= xCost) return { t: 'x', card: x };
   }
-  if (!plan) { take(p); return; }
+  if (!plan) return { t: 'k' };
   if (!end) {
     const cost = defenseCost(plan);
     const tc = tableCards();
@@ -623,15 +624,142 @@ function botDefend(p) {
     for (const c of tc) junk += Math.max(0, 4.5 - val(c)) * 1.2 + 2;
     const thr = (G.deck.length > 12 ? 8 : G.deck.length > 5 ? 13 : 20) + G.takeStreak * 4;
     const bloat = Math.max(0, h.length + tc.length - 8) * 2.5;
-    if (cost > thr + junk + bloat) { take(p); return; }
+    if (cost > thr + junk + bloat) return { t: 'k' };
   }
   plan.sort((x, y) => x[0] - y[0]);
-  if (!defendCard(plan[0][0], plan[0][1])) take(p);
+  return { t: 'b', slot: plan[0][0], card: plan[0][1] };
+}
+function applyDefend(p, a) {
+  if (a.t === 'x' && transfer(p, a.card)) return;
+  if (a.t === 'b' && defendCard(a.slot, a.card)) return;
+  take(p);
+}
+// ===== bot skill levels: 'easy' | 'normal' | 'hard' (Smart) =====
+let simDepth = 0, noSolve = 0;
+function lvl(p) { return simDepth ? 'normal' : (Hooks.level(p) || 'normal'); }
+function pick(a) { return a[Math.floor(Math.random() * a.length)]; }
+function botLead(p) { const l = lvl(p); return l === 'easy' ? easyLead(p) : l === 'hard' ? hardLead(p) : normLead(p); }
+function botThrow(p) { const l = lvl(p); return l === 'easy' ? easyThrow(p) : l === 'hard' ? hardThrow(p) : normThrow(p); }
+function botDefend(p) { const l = lvl(p); applyDefend(p, l === 'easy' ? easyDefend(p) : l === 'hard' ? hardDefend(p) : normDefend(p)); }
+
+// ----- Easy: no card counting, wastes trumps, never passes an attack on, sometimes gives up -----
+function easyLead(p) {
+  const h = G.hands[p], plain = h.filter(c => !isTrump(c));
+  return [pick(plain.length ? plain : h)];
+}
+function easyThrow(p) {
+  if (Math.random() < 0.5) return [];
+  const legal = G.hands[p].filter(c => canThrow(p, c));
+  const plain = legal.filter(c => !isTrump(c));
+  if (plain.length) return [pick(plain)];
+  return legal.length && Math.random() < 0.3 ? [pick(legal)] : [];
+}
+function easyDefend(p) {
+  const i = G.table.findIndex(x => x.d == null);
+  const beaters = G.hands[p].filter(c => beats(G.table[i].a, c));
+  if (!beaters.length || Math.random() < 0.12) return { t: 'k' };
+  return { t: 'b', slot: i, card: pick(beaters) };
+}
+
+// ----- Smart: Monte Carlo search over the cards it can't see -----
+// For each candidate move it imagines many deals of the unseen cards that fit what it
+// knows (who picked up what), plays each one out to the end with Normal-level play,
+// and picks the move that leaves it the durak least often. With 2 players left and the
+// deck empty it switches to the exact endgame solver with a much larger budget.
+const SMART = { leadMs: 280, defendMs: 280, throwMs: 100, minRounds: 12, maxRounds: 600, solveBudget: 150000 };
+const SIM_HOOKS = {
+  now: () => 0, windowMs: () => 0, turnMs: () => 0, level: () => 'normal', name: p => 'P' + p,
+  render() {}, schedule() {}, onPlay() {}, beforeClear() {}, onOver() {}
+};
+const clock = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
+function cloneG(g) {
+  return Object.assign({}, g, {
+    hands: g.hands.map(h => h.slice()), deck: g.deck.slice(), discard: g.discard.slice(),
+    table: g.table.map(x => ({ a: x.a, d: x.d })), passed: new Set(g.passed), out: new Set(g.out),
+    finishOrder: g.finishOrder.slice(), known: g.known.map(k => new Set(k)), bubble: g.bubble.slice(),
+    queue: g.queue.map(q => ({ p: q.p, id: q.id })), plays: [], humans: g.humans.map(() => false), afk: {},
+    winSig: null, deadline: null, turnSig: null, turnDeadline: null
+  });
+}
+function determinize(p) {
+  const w = cloneG(G);
+  const fixed = new Set(G.hands[p]);
+  for (const c of G.discard) fixed.add(c);
+  for (const c of tableCards()) fixed.add(c);
+  if (G.deck.length) fixed.add(G.trumpCard);
+  for (let q = 0; q < G.n; q++) if (q !== p) for (const c of G.known[q]) fixed.add(c);
+  const pool = [];
+  for (let id = 0; id < 36; id++) if (!fixed.has(id)) pool.push(id);
+  shuffle(pool);
+  for (let q = 0; q < G.n; q++) {
+    if (q === p) continue;
+    w.hands[q] = [...G.known[q], ...pool.splice(0, G.hands[q].length - G.known[q].size)];
+  }
+  w.deck = G.deck.length ? [G.trumpCard, ...pool] : [];
+  return w;
+}
+function smartChoose(p, cands, apply, baseIdx, ms) {
+  if (cands.length <= 1) return cands[0];
+  const real = G, realHooks = Hooks, n = cands.length;
+  const lose = Array(n).fill(0), runs = Array(n).fill(0);
+  const t0 = clock();
+  simDepth++; Hooks = SIM_HOOKS;
+  try {
+    for (let r = 0; r < SMART.maxRounds; r++) {
+      G = real;
+      const world = determinize(p); // same imagined deal for every candidate: a fair comparison
+      for (let i = 0; i < n; i++) {
+        G = cloneG(world);
+        apply(cands[i]);
+        let k = 0;
+        while (!G.over && k++ < 600) step();
+        lose[i] += !G.over ? 0.5 : G.durak === p ? 1 : 0;
+        runs[i]++;
+      }
+      if (r + 1 >= SMART.minRounds && clock() - t0 > ms) break;
+    }
+  } finally { G = real; Hooks = realHooks; simDepth--; }
+  let best = baseIdx, bv = lose[baseIdx] / runs[baseIdx] - 0.015; // ties go to the Normal move
+  for (let i = 0; i < n; i++) { const v = lose[i] / runs[i]; if (v < bv) { bv = v; best = i; } }
+  return cands[best];
+}
+function withoutSolver(f) { noSolve++; try { return f(); } finally { noSolve--; } }
+function hardLead(p) {
+  const sv = solveEndgame(p, SMART.solveBudget);
+  if (sv && sv.type === 'throw' && sv.v >= 0) return [sv.card];
+  const base = withoutSolver(() => normLead(p));
+  const cands = [{ cards: base }];
+  for (const c of G.hands[p]) if (base.length > 1 || c !== base[0]) cands.push({ cards: [c] });
+  return smartChoose(p, cands, c => { throwCard(p, c.cards[0]); G.queue = c.cards.slice(1).map(id => ({ p, id })); }, 0, SMART.leadMs).cards;
+}
+function hardThrow(p) {
+  const sv = solveEndgame(p, SMART.solveBudget);
+  if (sv && sv.v >= 0) return sv.type === 'throw' ? [sv.card] : [];
+  const legal = G.hands[p].filter(c => canThrow(p, c));
+  if (!legal.length) return [];
+  const base = withoutSolver(() => normThrow(p));
+  const cands = [{ pass: true }, ...legal.map(c => ({ card: c }))];
+  const bi = base.length ? Math.max(0, cands.findIndex(c => c.card === base[0])) : 0;
+  const ch = smartChoose(p, cands, c => { if (c.pass) G.passed.add(p); else throwCard(p, c.card); }, bi, SMART.throwMs);
+  return ch.pass ? [] : [ch.card];
+}
+function hardDefend(p) {
+  const sv = solveEndgame(p, SMART.solveBudget);
+  if (sv && sv.v >= 0) return sv.type === 'transfer' ? { t: 'x', card: sv.card } : sv.type === 'beat' ? { t: 'b', slot: sv.slot, card: sv.card } : { t: 'k' };
+  const base = withoutSolver(() => normDefend(p));
+  const cands = [{ t: 'k' }];
+  for (const c of transferCards(p)) cands.push({ t: 'x', card: c });
+  const slots = new Set([G.table.findIndex(x => x.d == null)]);
+  if (base.t === 'b') slots.add(base.slot);
+  for (const i of slots) for (const c of G.hands[p]) if (beats(G.table[i].a, c)) cands.push({ t: 'b', slot: i, card: c });
+  const bi = Math.max(0, cands.findIndex(c => c.t === base.t && c.card === base.card && (c.t !== 'b' || c.slot === base.slot)));
+  return smartChoose(p, cands, a => applyDefend(p, a), bi, SMART.defendMs);
 }
 
 // ----- exact endgame solver (deck empty, 2 players left: perfect information) -----
 function popc(x) { let c = 0; while (x) { x &= x - 1; c++; } return c; }
 function solveEndgame(me, budget = 40000) {
+  if (simDepth || noSolve) return null;
   if (G.deck.length) return null;
   const act = [...Array(G.n).keys()].filter(p => !G.out.has(p));
   if (act.length !== 2 || !act.includes(me)) return null;
@@ -811,8 +939,19 @@ const $ = s => document.querySelector(s);
 const BOT_NAMES = ['Anya', 'Viktor', 'Misha', 'Olga'];
 function load(k, d) { try { const v = JSON.parse(localStorage.getItem(k)); return v ? Object.assign({}, d, v) : d; } catch (e) { return d; } }
 function save(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} }
-let settings = load('durak-settings', { opps: 2, speed: 'normal', seats: 4 });
-let stats = load('durak-stats', { played: 0, durak: 0, escaped: 0 });
+let settings = load('durak-settings', { opps: 2, speed: 'normal', seats: 4, level: 'normal' });
+if (!['easy', 'normal', 'hard'].includes(settings.level)) settings.level = 'normal';
+const LEVELS = { easy: 'Easy', normal: 'Normal', hard: 'Smart' };
+const LEVEL_INFO = {
+  easy: "Easy bots don't count cards, waste their trumps and give up too soon.",
+  normal: 'Normal bots count cards, remember what you picked up and pass attacks on when it pays.',
+  hard: 'Smart bots play out hundreds of possible games in their head before every move, and play perfectly once two players are left and the deck is empty.'
+};
+const blankStats = () => ({ played: 0, durak: 0, escaped: 0 });
+// one record per skill level; older single records count as Normal
+let statsAll = load('durak-stats-lv', { easy: blankStats(), normal: load('durak-stats', blankStats()), hard: blankStats() });
+function curLevel() { return mode === 'client' ? (net.level || 'normal') : settings.level; }
+function curStats() { return statsAll[curLevel()] || (statsAll[curLevel()] = blankStats()); }
 let wasMyTurn = false;
 let timer = null, drag = null, handDirty = false, pendingDropRect = null, sortMode = 0, toastT = null, announcedOut = false;
 const pendingFly = new Map();
@@ -850,6 +989,7 @@ function delay(kind) {
 Hooks.schedule = kind => { clearTimeout(timer); timer = setTimeout(step, delay(kind ?? 'think')); };
 Hooks.render = () => { render(); if (mode === 'host') broadcastSoon(); };
 Hooks.turnMs = () => mode === 'host' ? 45000 : 0;
+Hooks.level = () => settings.level;
 Hooks.windowMs = () => ({ relaxed: 5500, normal: 4000, fast: 2600 }[settings.speed] || 4000);
 function seatRect(p) {
   const el = document.querySelector(`#opp-${p} .backs`);
@@ -901,9 +1041,10 @@ Hooks.onOver = () => {
 };
 function gameOverLocal() {
   if (me >= 0) {
-    stats.played++;
-    if (G.durak === me) stats.durak++; else stats.escaped++;
-    save('durak-stats', stats);
+    const st = curStats();
+    st.played++;
+    if (G.durak === me) st.durak++; else st.escaped++;
+    save('durak-stats-lv', statsAll);
   }
   const g = gid; setTimeout(() => { if (gid === g && G && G.over) showResult(); }, 900);
 }
@@ -1322,10 +1463,14 @@ function openSheet(html, kind = null) {
 function closeSheet() { $('#sheet').classList.remove('show'); sheetKind = null; $('#panel').dataset.html = ''; }
 $('#sheet').addEventListener('click', e => { if (e.target.id === 'sheet') closeSheet(); });
 function statsHTML() {
+  const stats = curStats();
   return `<div class="stats"><div><b>${stats.played}</b><span>Games</span></div><div><b>${stats.escaped}</b><span>Escaped</span></div><div><b>${stats.durak}</b><span>Times durak</span></div></div>`;
 }
 function seg(key, opts, cur) {
   return `<div class="seg" data-key="${key}">${opts.map(([v, l, dis]) => `<button data-v="${v}" class="${String(cur ?? settings[key]) === String(v) ? 'on' : ''}"${dis ? ' disabled' : ''}>${l}</button>`).join('')}</div>`;
+}
+function levelSeg() {
+  return `${seg('level', Object.entries(LEVELS))}<p class="muted small-p" style="margin:6px 0 0">${LEVEL_INFO[settings.level]}${G && !G.over && mode !== 'client' ? ' Takes effect on the bots\' next move.' : ''}</p>`;
 }
 function wireSegs(onChange) {
   document.querySelectorAll('#panel .seg').forEach(sg => sg.addEventListener('click', e => {
@@ -1340,10 +1485,11 @@ function showMenu() {
   if (mode === 'client') return showClientLobby();
   openSheet(`<h2>Game</h2>
     <div class="lbl">Opponents</div>${seg('opps', [[1, '1 bot'], [2, '2 bots'], [3, '3 bots']])}
+    <div class="lbl">Bot skill</div>${levelSeg()}
     <div class="lbl">Bot speed</div>${seg('speed', [['relaxed', 'Slow'], ['normal', 'Human'], ['fast', 'Quick']])}
-    <div class="lbl">Your record</div>${statsHTML()}
+    <div class="lbl">Your record vs ${LEVELS[settings.level]} bots</div>${statsHTML()}
     <div class="row"><button class="btn ghost" id="friendsB">Play with friends</button><button class="btn primary" id="newB">New game</button></div>`, 'menu');
-  wireSegs();
+  wireSegs(k => { if (k === 'level') showMenu(); });
   $('#friendsB').onclick = showFriends;
   $('#newB').onclick = () => { closeSheet(); startSolo(); };
 }
@@ -1364,7 +1510,7 @@ function showRules() {
       <li><b>Friends:</b> tap Friends, host a table, and send the invite link. Bots fill empty seats. If someone's phone drops off, a bot covers for them and they get their seat back when they reconnect.</li>
       <li><b>Turn clock:</b> with friends, you have 45 seconds to attack or defend. After that a bot moves for you, so nobody is stuck waiting.</li>
     </ul>
-    <p>The bots count cards, remember what you picked up, pass attacks on when it pays, and play the endgame perfectly once two players are left and the deck is empty.</p>
+    <p><b>Bot skill</b> (in the ☰ menu): ${LEVEL_INFO.easy} ${LEVEL_INFO.normal} ${LEVEL_INFO.hard} No bot ever peeks at your cards.</p>
     <div class="row"><button class="btn primary" id="closeB">Got it</button></div>`, 'rules');
   $('#closeB').onclick = closeSheet;
 }
@@ -1706,8 +1852,8 @@ function broadcast() {
   for (const p of net.players) {
     if (p.host || !p.peer) continue;
     const data = inGame
-      ? snapshot({ ph: 'game', gid, code: net.code, si, pl2: pl, ty, dlm: G.deadline ? Math.max(0, G.deadline - Date.now()) : null, wl: G.winLen || 0 }, seatOf(p.by))
-      : { ph: 'lobby', code: net.code, pl, seats: Math.max(settings.seats, net.players.length), gid, ty };
+      ? snapshot({ ph: 'game', gid, code: net.code, si, pl2: pl, ty, lv: settings.level, dlm: G.deadline ? Math.max(0, G.deadline - Date.now()) : null, wl: G.winLen || 0 }, seatOf(p.by))
+      : { ph: 'lobby', code: net.code, pl, seats: Math.max(settings.seats, net.players.length), gid, ty, lv: settings.level };
     net.tbl.sendTo(p.peer, 'state', data);
   }
   saveHostSession();
@@ -1772,10 +1918,11 @@ function showHostLobby() {
     <button class="btn ghost wide" id="inviteB" style="margin-top:10px">${navigator.share ? 'Share invite link' : 'Copy invite link'}</button>
     <div class="lbl">Seats</div><div class="seats">${rows.join('')}</div>
     ${inGame ? '' : `<div class="lbl">Players at the table</div>${seg('seats', [2, 3, 4].map(n => [n, n + ' seats', n < ppl.length]), total)}`}
+    <div class="lbl">Bot skill</div>${levelSeg()}
     <div class="lbl">Bot speed</div>${seg('speed', [['relaxed', 'Slow'], ['normal', 'Human'], ['fast', 'Quick']])}
     ${tallyHTML()}
     <div class="row"><button class="btn ghost" id="closeT">Close table</button>${inGame ? `<button class="btn primary" id="backB">Back to game</button>` : `<button class="btn primary" id="startB">Deal</button>`}</div>`, 'host');
-  wireSegs(k => { if (k === 'seats') { showHostLobby(); broadcast(); } });
+  wireSegs(k => { if (k === 'seats' || k === 'level') { showHostLobby(); broadcast(); } });
   $('#inviteB').onclick = shareInvite;
   $('#closeT').onclick = leaveTable;
   if (inGame) $('#backB').onclick = closeSheet; else $('#startB').onclick = () => { closeSheet(); hostStart(); };
@@ -1917,6 +2064,7 @@ function onState(msg) {
   if (net.reconnecting) { net.reconnecting = false; renderNetBanner(); }
   if (!net.lastSave || net.lastState - net.lastSave > 10000) { net.lastSave = net.lastState; ss('durak-session', { role: 'client', code: net.code, at: net.lastState }); }
   net.tallyList = Array.isArray(x.ty) ? x.ty : [];
+  if (LEVELS[x.lv]) net.level = x.lv;
   if (x.ph === 'lobby') {
     net.phase = 'lobby'; net.players = Array.isArray(x.pl) ? x.pl : []; net.seats = x.seats || 4;
     if (sheetKind === 'client' || sheetKind === 'result' || sheetKind == null) showClientLobby();
@@ -1965,7 +2113,7 @@ function showClientLobby() {
   const host = ppl.find(p => p.host);
   openSheet(`<h2>${joining ? 'Joining table…' : 'Table ' + esc((net.code || '').toUpperCase())}</h2>
     ${joining ? `<p class="muted">Connecting to table ${esc((net.code || '').toUpperCase())}…</p>` : `<div class="seats">${rows.join('')}</div>
-    <p class="muted">${inGame ? (me >= 0 ? 'Game in progress.' : "A game is in progress. You'll be dealt in next game.") : `Waiting for ${esc(host ? host.nick : 'the host')} to deal…`}</p>${tallyHTML()}`}
+    <p class="muted">${inGame ? (me >= 0 ? 'Game in progress.' : "A game is in progress. You'll be dealt in next game.") : `Waiting for ${esc(host ? host.nick : 'the host')} to deal…`}${ppl.length < total ? ` Bots: ${LEVELS[net.level || 'normal']}.` : ''}</p>${tallyHTML()}`}
     <div class="row"><button class="btn ghost" id="leaveB">Leave table</button>${inGame ? `<button class="btn primary" id="backB">Back to game</button>` : ''}</div>`, 'client');
   $('#leaveB').onclick = leaveTable;
   if (inGame) $('#backB').onclick = closeSheet;

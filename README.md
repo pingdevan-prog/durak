@@ -19,6 +19,14 @@ The host's phone runs the game. Phones connect directly through [PeerJS](https:/
 
 Your cards are only sent to your own phone, so nobody can peek at your hand.
 
+## Bot skill
+Pick it in the ☰ menu (or on the host's table screen when playing with friends). Bots never look at anyone's hidden cards.
+- **Easy:** no card counting, wastes trumps, gives up too soon.
+- **Normal:** counts cards, remembers what each player picked up, passes attacks on when it pays.
+- **Smart:** before every move it imagines hundreds of ways the unseen cards could be dealt, plays each one out, and picks the move that leaves it the durak least often. It switches to an exact solver once two players are left and the deck is empty.
+
+In test games between the bots, Smart was the durak 17% of the time one-on-one against Normal (Normal: 78%), and 9% at a 3-player table against two Normal bots. Easy was the durak 96% of the time against Normal.
+
 ## Rules in this version
 - 36 cards (6 to Ace); the card under the deck sets trumps.
 - Anyone except the defender can throw in matching ranks, first come, first served; a timer bar ends the bout when nobody adds a card.
