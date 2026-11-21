@@ -115,7 +115,11 @@ header .sp { flex: 1; }
 .card.trump::after { content: ''; position: absolute; inset: 0; border-radius: inherit; box-shadow: inset 0 0 0 2px var(--brass); pointer-events: none; }
 .card.back { background: repeating-linear-gradient(45deg, #7d1f2c 0 4px, #96283a 4px 8px); border: 3px solid var(--ivory); }
 
-#bar { display: flex; align-items: center; gap: 8px; padding: 6px 0; min-height: 50px; }
+#bar { display: flex; align-items: flex-end; gap: 8px; padding: 6px 0; min-height: 50px; }
+#status { align-self: center; }
+.acts { display: flex; flex-direction: column; gap: 8px; min-width: 84px; }
+.acts .btn { width: 100%; }
+#takeBtn { height: 46px; font-size: 16px; }
 #status { flex: 1; font-size: 14px; line-height: 1.3; color: var(--text); }
 #status .me-role { display: inline-block; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; padding: 2px 7px; border-radius: 6px; margin-right: 6px; background: rgba(0,0,0,.3); color: var(--muted); vertical-align: 1px; }
 #status .me-role.att { color: var(--ink); background: var(--brass); } #status .me-role.def { color: var(--ink); background: var(--blue); }
@@ -188,9 +192,15 @@ header .sp { flex: 1; }
 .result-big { font-size: 46px; text-align: center; margin: 4px 0 2px; }
 #bar { position: relative; }
 #emoBtn { padding: 0 10px; font-size: 18px; }
-#emoPop { position: absolute; right: 0; bottom: calc(100% + 6px); display: none; gap: 2px; padding: 6px; background: rgba(10,20,16,.96); border-radius: 14px; border: 1px solid rgba(255,255,255,.14); z-index: 60; box-shadow: 0 8px 24px rgba(0,0,0,.4); }
-#emoPop.show { display: flex; }
-#emoPop button { width: 42px; height: 42px; font-size: 24px; border: 0; background: transparent; border-radius: 10px; cursor: pointer; }
+#emoPop { position: absolute; right: 0; bottom: calc(100% + 6px); display: none; width: min(300px, calc(100vw - 24px)); padding: 8px; background: rgba(10,20,16,.96); border-radius: 14px; border: 1px solid rgba(255,255,255,.14); z-index: 60; box-shadow: 0 8px 24px rgba(0,0,0,.4); }
+#emoPop.show { display: block; }
+#emoPop .grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 2px; }
+#emoPop .sub { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin: 4px 4px 4px; }
+#emoPop form { display: flex; gap: 6px; margin-top: 8px; }
+#emoPop input { flex: 1; min-width: 0; height: 42px; border-radius: 10px; border: 1px solid rgba(255,255,255,.18); background: rgba(0,0,0,.3); color: var(--text); font: 500 20px var(--font-body); padding: 0 10px; }
+#emoPop input::placeholder { font-size: 14px; color: var(--muted); }
+#emoPop form .btn { height: 42px; padding: 0 12px; font-size: 14px; }
+#emoPop .grid button { width: 100%; height: 42px; font-size: 24px; border: 0; background: transparent; border-radius: 10px; cursor: pointer; }
 #emoPop button:active { background: rgba(255,255,255,.12); }
 .emo { position: fixed; z-index: 1200; font-size: 40px; line-height: 1; pointer-events: none; transform: translate(-50%, -50%); animation: emo 2.2s ease-out forwards; filter: drop-shadow(0 4px 8px rgba(0,0,0,.4)); }
 @keyframes emo { 0% { transform: translate(-50%, -30%) scale(.4); opacity: 0; } 15% { transform: translate(-50%, -70%) scale(1.2); opacity: 1; } 70% { opacity: 1; } 100% { transform: translate(-50%, -150%) scale(1); opacity: 0; } }
@@ -230,8 +240,10 @@ header .sp { flex: 1; }
     <div id="status"></div>
     <button class="btn ghost" id="emoBtn" aria-label="Send a reaction" hidden>😀</button>
     <div id="emoPop" role="menu"></div>
-    <button class="btn ghost" id="sortBtn">Sort</button>
-    <button class="btn danger" id="takeBtn" hidden>Take</button>
+    <div class="acts">
+      <button class="btn danger" id="takeBtn" hidden>Take</button>
+      <button class="btn ghost" id="sortBtn">Sort</button>
+    </div>
   </div>
   <section id="handWrap">
     <div id="toast"></div>
@@ -242,10 +254,15 @@ header .sp { flex: 1; }
 <div id="sheet"><div class="panel" id="panel"></div></div>
 <script>
 // ===== Durak engine (podkidnoy, 36 cards) =====
-const RANKS = ['6','7','8','9','10','J','Q','K','A'];
+// Card ids cover a full 52-card deck (suit * 13 + rank, rank 0 = '2'); a game uses ranks from G.lowR up.
+const RANKS = ['2','3','4','5','6','7','8','9','10','J','Q','K','A'];
 const SUITS = ['♠','♥','♦','♣'];
-const S = id => Math.floor(id / 9);
-const R = id => id % 9;
+const S = id => Math.floor(id / 13);
+const R = id => id % 13;
+const lowR = () => (G && G.lowR != null ? G.lowR : 4);   // 4 = '6', the classic 36-card deck
+const rr = id => R(id) - lowR();                          // rank counted from the lowest card in play
+const DECK_IDS = [0, 1, 2, 3, 4].map(low => { const a = []; for (let id = 0; id < 52; id++) if (R(id) >= low) a.push(id); return a; });
+function deckIds(low) { return DECK_IDS[low]; }   // shared arrays: copy before changing
 let G = null;
 const MAX_BOUT = 5;
 let Hooks = {
@@ -255,7 +272,7 @@ let Hooks = {
 };
 
 function isTrump(id) { return S(id) === G.trump; }
-function val(id) { return R(id) + (isTrump(id) ? 9 : 0); }
+function val(id) { return rr(id) + (isTrump(id) ? 13 - lowR() : 0); }
 function beats(a, d) { return (S(d) === S(a) && R(d) > R(a)) || (isTrump(d) && !isTrump(a)); }
 function cardName(id) { return RANKS[R(id)] + SUITS[S(id)]; }
 function shuffle(a) {
@@ -265,9 +282,10 @@ function shuffle(a) {
 
 function newGame(opts) {
   const n = opts.players;
-  const deck = shuffle([...Array(36).keys()]);
+  const low = opts.low != null && opts.low >= 0 && opts.low <= 4 ? opts.low : 4;
+  const deck = shuffle(deckIds(low).slice());
   G = {
-    n, humans: opts.humans || Array.from({ length: n }, (_, i) => i === 0), plays: [], playSeq: 0, clearSeq: 0,
+    n, lowR: low, humans: opts.humans || Array.from({ length: n }, (_, i) => i === 0), plays: [], playSeq: 0, clearSeq: 0,
     hands: Array.from({ length: n }, () => []),
     deck, trumpCard: deck[0], trump: S(deck[0]),
     discard: [], table: [], attacker: 0, defender: 1,
@@ -287,7 +305,7 @@ function newGame(opts) {
   let best = -1, bv = 99;
   for (let p = 0; p < n; p++) for (const c of G.hands[p]) if (isTrump(c) && R(c) < bv) { bv = R(c); best = p; }
   if (best < 0) { best = Math.floor(Math.random() * n); G.introData = { kind: 'random', att: best }; }
-  else G.introData = { kind: 'trump', att: best, card: G.trump * 9 + bv };
+  else G.introData = { kind: 'trump', att: best, card: G.trump * 13 + bv };
   G.attacker = best;
   startBout();
 }
@@ -531,7 +549,7 @@ function unseenPool(p, def) {
   if (G.deck.length) excl.add(G.trumpCard);
   for (let q = 0; q < G.n; q++) if (q !== p) for (const c of G.known[q]) excl.add(c);
   const pool = [];
-  for (let id = 0; id < 36; id++) if (!excl.has(id)) pool.push(id);
+  for (const id of deckIds(lowR())) if (!excl.has(id)) pool.push(id);
   return pool;
 }
 function pBeat(c, def, pool) {
@@ -594,7 +612,7 @@ function planDefense(h, un) {
 }
 function defenseCost(plan) {
   let cost = 0;
-  for (const [, c] of plan) cost += isTrump(c) ? 5 + R(c) * 1.5 : 0.3 * val(c);
+  for (const [, c] of plan) cost += isTrump(c) ? 5 + rr(c) * 1.5 : 0.3 * val(c);
   return cost;
 }
 // Normal defender: returns one action {t:'b', slot, card} beat | {t:'x', card} pass on | {t:'k'} take
@@ -613,7 +631,7 @@ function normDefend(p) {
   let plan = p1 && p2 ? (defenseCost(p1) <= defenseCost(p2) ? p1 : p2) : (p1 || p2);
   if (xs.length) {
     const x = xs[0];
-    const xCost = isTrump(x) ? 5 + R(x) * 1.5 : 0;
+    const xCost = isTrump(x) ? 5 + rr(x) * 1.5 : 0;
     if (!plan || !isTrump(x) || defenseCost(plan) >= xCost) return { t: 'x', card: x };
   }
   if (!plan) return { t: 'k' };
@@ -689,7 +707,7 @@ function determinize(p) {
   if (G.deck.length) fixed.add(G.trumpCard);
   for (let q = 0; q < G.n; q++) if (q !== p) for (const c of G.known[q]) fixed.add(c);
   const pool = [];
-  for (let id = 0; id < 36; id++) if (!fixed.has(id)) pool.push(id);
+  for (const id of deckIds(lowR())) if (!fixed.has(id)) pool.push(id);
   shuffle(pool);
   for (let q = 0; q < G.n; q++) {
     if (q === p) continue;
@@ -799,7 +817,7 @@ function solveEndgame(me, budget = 40000) {
     let best = maxer ? -2 : 2;
     const consider = v => { if (maxer ? v > best : v < best) best = v; return maxer ? best === 1 : best === -1; };
     if (!lead && consider(endVal(A, D, T, K, meAtt))) { memo.set(key, best); return best; }
-    const rs = lead ? 0x1ff : ranksOf(T);
+    const rs = lead ? 0x1fff : ranksOf(T);
     const canAdd = L > 0 && (K || popc(U) < popc(D));
     if (canAdd || lead) {
       for (let t = A; t; t &= t - 1) {
@@ -882,7 +900,7 @@ function solveEndgame(me, budget = 40000) {
     const lead = G.table.length === 0 ? 1 : 0;
     let best = null, bv = -2;
     if (!lead) { bv = endVal(A0, D0, T0, K0, 1); best = { type: 'pass' }; }
-    const rs = lead ? 0x1ff : ranksOf(T0);
+    const rs = lead ? 0x1fff : ranksOf(T0);
     const canAdd = lead || (L0 > 0 && (K0 || popc(U0) < popc(D0)));
     if (canAdd && bv < 1) {
       for (let t = A0; t; t &= t - 1) {
@@ -904,7 +922,7 @@ function solveEndgame(me, budget = 40000) {
 // Each friend gets only their own cards; everyone else's hand is sent as a count.
 function snapshot(extra, seat) {
   return Object.assign({
-    n: G.n, hu: G.humans, h: G.hands.map((hd, p) => p === seat ? hd : hd.length),
+    n: G.n, lo: G.lowR, hu: G.humans, h: G.hands.map((hd, p) => p === seat ? hd : hd.length),
     ct: G.hands.map((_, p) => canThrowAny(p) ? 1 : 0),
     tdl: G.turnDeadline ? Math.max(0, G.turnDeadline - Date.now()) : null, tf: G.turnFor == null ? -1 : G.turnFor,
     af: G.afk ? Object.keys(G.afk).filter(k => G.afk[k]).map(Number) : [], dl: G.deck.length, tc: G.trumpCard, tr: G.trump, dc: G.discard.length,
@@ -917,7 +935,7 @@ function snapshot(extra, seat) {
 function fromSnapshot(x) {
   const deck = Array(x.dl).fill(-1); if (x.dl) deck[0] = x.tc;
   return {
-    n: x.n, humans: x.hu, hands: x.h.map(hd => Array.isArray(hd) ? hd : Array(+hd || 0).fill(-1)), deck,
+    n: x.n, lowR: x.lo != null ? x.lo : 4, humans: x.hu, hands: x.h.map(hd => Array.isArray(hd) ? hd : Array(+hd || 0).fill(-1)), deck,
     ct: x.ct || null, turnDeadline: x.tdl != null ? Date.now() + x.tdl : null, turnFor: x.tf, afk: Object.fromEntries((x.af || []).map(p => [p, true])), trumpCard: x.tc, trump: x.tr, discard: Array(x.dc).fill(-1),
     table: x.t.map(p => ({ a: p[0], d: p.length > 1 ? p[1] : null })), attacker: x.a, defender: x.d, taking: !!x.tk,
     passed: new Set(x.ps), boutLimit: x.bl, out: new Set(x.o), finishOrder: [], known: Array.from({ length: x.n }, () => new Set()),
@@ -941,6 +959,13 @@ function load(k, d) { try { const v = JSON.parse(localStorage.getItem(k)); retur
 function save(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} }
 let settings = load('durak-settings', { opps: 2, speed: 'normal', seats: 4, level: 'normal' });
 if (!['easy', 'normal', 'hard'].includes(settings.level)) settings.level = 'normal';
+if (!['auto', '6', '5', '4', '3', '2'].includes(String(settings.low))) settings.low = 'auto';
+// Lowest card in the deck: Auto is 6 (36 cards) for 2 or 3 players and 5 (40 cards) for 4.
+function lowFor(n) { return settings.low === 'auto' ? (n >= 4 ? 3 : 4) : RANKS.indexOf(String(settings.low)); }
+function deckLabel(low) { return `${RANKS[low]} through Ace, ${(13 - low) * 4} cards`; }
+function deckSeg(n) {
+  return `${seg('low', [['auto', 'Auto'], ['6', '6'], ['5', '5'], ['4', '4'], ['3', '3'], ['2', '2']])}<p class="muted small-p" style="margin:6px 0 0">${deckLabel(lowFor(n))}. Auto starts at 6 for 2 or 3 players and 5 for 4.${G && !G.over && mode !== 'client' ? ' Changes apply next game.' : ''}</p>`;
+}
 const LEVELS = { easy: 'Easy', normal: 'Normal', hard: 'Smart' };
 const LEVEL_INFO = {
   easy: "Easy bots don't count cards, waste their trumps and give up too soon.",
@@ -1442,7 +1467,7 @@ window.addEventListener('resize', () => { if (G) layoutHand(myHand()); });
 
 $('#takeBtn').onclick = () => doAction('k');
 $('#sortBtn').onclick = () => {
-  const suitKey = id => (isTrump(id) ? 10 : S(id)) * 10 + R(id);
+  const suitKey = id => (isTrump(id) ? 10 : S(id)) * 20 + R(id);
   const rankKey = id => (isTrump(id) ? 1000 : 0) + R(id) * 10 + S(id);
   myHand().sort((a, b) => sortMode === 0 ? suitKey(a) - suitKey(b) : rankKey(a) - rankKey(b));
   toast(sortMode === 0 ? 'Sorted by suit, trumps on the right' : 'Sorted by rank, trumps on the right', 1200);
@@ -1486,10 +1511,11 @@ function showMenu() {
   openSheet(`<h2>Game</h2>
     <div class="lbl">Opponents</div>${seg('opps', [[1, '1 bot'], [2, '2 bots'], [3, '3 bots']])}
     <div class="lbl">Bot skill</div>${levelSeg()}
+    <div class="lbl">Lowest card in the deck</div>${deckSeg(settings.opps + 1)}
     <div class="lbl">Bot speed</div>${seg('speed', [['relaxed', 'Slow'], ['normal', 'Human'], ['fast', 'Quick']])}
     <div class="lbl">Your record vs ${LEVELS[settings.level]} bots</div>${statsHTML()}
     <div class="row"><button class="btn ghost" id="friendsB">Play with friends</button><button class="btn primary" id="newB">New game</button></div>`, 'menu');
-  wireSegs(k => { if (k === 'level') showMenu(); });
+  wireSegs(k => { if (k === 'level' || k === 'low' || k === 'opps') showMenu(); });
   $('#friendsB').onclick = showFriends;
   $('#newB').onclick = () => { closeSheet(); startSolo(); };
 }
@@ -1497,7 +1523,7 @@ function showRules() {
   openSheet(`<h2>How to play Durak</h2>
     <p>Get rid of all your cards. The last player still holding cards is the <b>durak</b> (the fool).</p>
     <ul>
-      <li>36 cards, 6 through Ace. The card under the deck sets the <b>trump</b> suit. Trumps beat every other suit.</li>
+      <li>${G ? deckLabel(lowR()) : '6 through Ace, 36 cards'} (change it in the ☰ menu). The card under the deck sets the <b>trump</b> suit. Trumps beat every other suit.</li>
       <li><b>Attack:</b> drag any card onto the table. After that, anyone except the defender can throw in cards whose <b>rank</b> is already on the table.</li>
       <li><b>Defend:</b> drag a card onto an attacking card to beat it: a higher card of the same suit, or any trump. Can't or don't want to? Tap <b>Take</b> to pick up everything.</li>
       <li><b>Pass it on:</b> before you beat anything, play a card of the <b>same rank</b> to transfer the attack to the next player. They then have to deal with every card, including yours. Drag it onto the dashed spot.</li>
@@ -1538,7 +1564,15 @@ $('#mpBtn').onclick = () => mode === 'solo' ? showFriends() : showMenu();
 // ===== multiplayer: phones connect directly through PeerJS; the host's phone runs the game =====
 // Players are identified by a per-tab id ("by") that survives reconnects, never by the connection id.
 const net = { tbl: null, code: null, myBy: null, myNick: '', players: [], phase: 'lobby', lastState: 0, offs: [], timers: [], reconnecting: false, recSince: 0, gen: 0, seats: 4, tally: {}, emoAt: {} };
-const EMOJIS = ['👍', '😂', '😮', '😡', '🔥', '🙏'];
+const EMOJIS = ['👍', '😂', '😮', '😡', '🔥', '🙏', '😭', '💀', '🤡', '😎', '🤔', '👏', '🫡', '🥶', '😈', '🤯', '🃏', '❤️'];
+// Any emoji goes, as long as it's only emoji (up to 3) and short.
+function cleanEmoji(e) {
+  e = String(e || '').replace(/\s+/g, '');
+  if (!e || e.length > 24 || !/\p{Extended_Pictographic}|\p{Regional_Indicator}/u.test(e)) return null;
+  if (/[\p{L}\p{N}\p{P}<>=+^`|~$]/u.test(e.replace(/[#*0-9]\uFE0F?\u20E3/gu, ''))) return null;
+  if (typeof Intl !== 'undefined' && Intl.Segmenter && [...new Intl.Segmenter().segment(e)].length > 3) return null;
+  return e;
+}
 const SESSION_MAX = 45 * 60 * 1000;
 let hostLastDurak = null;
 
@@ -1813,7 +1847,7 @@ function onAct(msg) {
   const pl = net.players.find(p => p.by === by);
   if (pl) { pl.seen = Date.now(); if (pl.peer !== msg.peer) { if (pl.peer) net.tbl.drop(pl.peer); pl.peer = msg.peer; } }
   const seat = seatOf(by);
-  const id = Number.isInteger(d.id) && d.id >= 0 && d.id < 36 ? d.id : null;
+  const id = Number.isInteger(d.id) && d.id >= 0 && d.id < 52 ? d.id : null;
   const nack = () => net.tbl.sendTo(msg.peer, 'nack', { id });
   if (seat <= 0 || (d.gid != null && d.gid !== gid)) { nack(); return; }
   if (seatInfo[seat].gone) hostTick();
@@ -1830,7 +1864,8 @@ function onEmoMsg(msg) {
   if (mode !== 'host') return;
   const e = msg.data && msg.data.e;
   const s = seatOf(msg.by);
-  if (s > 0 && EMOJIS.includes(e)) relayEmote(s, e);
+  const ok = cleanEmoji(e);
+  if (s > 0 && ok) relayEmote(s, ok);
 }
 function relayEmote(s, e) {
   const now = Date.now();
@@ -1853,7 +1888,7 @@ function broadcast() {
     if (p.host || !p.peer) continue;
     const data = inGame
       ? snapshot({ ph: 'game', gid, code: net.code, si, pl2: pl, ty, lv: settings.level, dlm: G.deadline ? Math.max(0, G.deadline - Date.now()) : null, wl: G.winLen || 0 }, seatOf(p.by))
-      : { ph: 'lobby', code: net.code, pl, seats: Math.max(settings.seats, net.players.length), gid, ty, lv: settings.level };
+      : { ph: 'lobby', code: net.code, pl, seats: Math.max(settings.seats, net.players.length), gid, ty, lv: settings.level, lo: lowFor(Math.max(settings.seats, net.players.length)) };
     net.tbl.sendTo(p.peer, 'state', data);
   }
   saveHostSession();
@@ -1861,7 +1896,7 @@ function broadcast() {
 function saveHostSession() {
   if (mode !== 'host' || !net.code) return;
   ss('durak-session', {
-    role: 'host', code: net.code, at: Date.now(), phase: net.phase, gid, last: hostLastDurak, tally: net.tally, myOrder,
+    role: 'host', v: 2, code: net.code, at: Date.now(), phase: net.phase, gid, last: hostLastDurak, tally: net.tally, myOrder,
     players: net.players.map(p => ({ by: p.by, nick: p.nick, raw: p.raw, host: !!p.host })),
     seatInfo: net.phase === 'game' ? seatInfo : null, g: net.phase === 'game' && G ? dumpG() : null
   });
@@ -1885,7 +1920,7 @@ async function restoreHost(s) {
   const grace = Date.now() + 20000; // give friends time to reconnect before bots step in
   net.players = (s.players || []).map(p => Object.assign({}, p, { seen: Date.now(), grace, live: !!p.host }));
   if (!net.players.length || !net.players[0].host) net.players.unshift({ by: net.myBy, nick: net.myNick, raw: net.myNick, host: true, live: true, seen: Date.now() });
-  if (s.g && s.seatInfo) {
+  if (s.g && s.seatInfo && s.v === 2) {
     resetHandView();
     seatInfo = s.seatInfo; G = loadG(s.g); me = 0; myOrder = s.myOrder || [];
     G.winSig = null; G.deadline = null; G.turnSig = null; G.turnDeadline = null;
@@ -1919,10 +1954,11 @@ function showHostLobby() {
     <div class="lbl">Seats</div><div class="seats">${rows.join('')}</div>
     ${inGame ? '' : `<div class="lbl">Players at the table</div>${seg('seats', [2, 3, 4].map(n => [n, n + ' seats', n < ppl.length]), total)}`}
     <div class="lbl">Bot skill</div>${levelSeg()}
+    ${inGame ? '' : `<div class="lbl">Lowest card in the deck</div>${deckSeg(total)}`}
     <div class="lbl">Bot speed</div>${seg('speed', [['relaxed', 'Slow'], ['normal', 'Human'], ['fast', 'Quick']])}
     ${tallyHTML()}
     <div class="row"><button class="btn ghost" id="closeT">Close table</button>${inGame ? `<button class="btn primary" id="backB">Back to game</button>` : `<button class="btn primary" id="startB">Deal</button>`}</div>`, 'host');
-  wireSegs(k => { if (k === 'seats' || k === 'level') { showHostLobby(); broadcast(); } });
+  wireSegs(k => { if (k === 'seats' || k === 'level' || k === 'low') { showHostLobby(); broadcast(); } });
   $('#inviteB').onclick = shareInvite;
   $('#closeT').onclick = leaveTable;
   if (inGame) $('#backB').onclick = closeSheet; else $('#startB').onclick = () => { closeSheet(); hostStart(); };
@@ -1962,7 +1998,7 @@ function hostStart() {
   if (hostLastDurak) { const k = seatInfo.findIndex((s, p) => seatKey(p) === hostLastDurak); if (k >= 0) fd = k; }
   me = 0; gid++;
   resetHandView();
-  newGame({ players: total, humans, firstDefender: fd });
+  newGame({ players: total, humans, firstDefender: fd, low: lowFor(total) });
   net.phase = 'game';
   render(); broadcast();
   toast(introText(G.introData), 3600);
@@ -2054,7 +2090,8 @@ function onNack(msg) {
 }
 function onEmoEvt(msg) {
   const d = msg.data || {};
-  if (d.gid === gid && d.s !== me && EMOJIS.includes(d.e)) showEmote(d.s, d.e);
+  const e = cleanEmoji(d.e);
+  if (d.gid === gid && d.s !== me && e) showEmote(d.s, e);
 }
 function onState(msg) {
   if (mode !== 'client') return;
@@ -2065,6 +2102,7 @@ function onState(msg) {
   if (!net.lastSave || net.lastState - net.lastSave > 10000) { net.lastSave = net.lastState; ss('durak-session', { role: 'client', code: net.code, at: net.lastState }); }
   net.tallyList = Array.isArray(x.ty) ? x.ty : [];
   if (LEVELS[x.lv]) net.level = x.lv;
+  if (Number.isInteger(x.lo)) net.low = x.lo;
   if (x.ph === 'lobby') {
     net.phase = 'lobby'; net.players = Array.isArray(x.pl) ? x.pl : []; net.seats = x.seats || 4;
     if (sheetKind === 'client' || sheetKind === 'result' || sheetKind == null) showClientLobby();
@@ -2113,7 +2151,7 @@ function showClientLobby() {
   const host = ppl.find(p => p.host);
   openSheet(`<h2>${joining ? 'Joining table…' : 'Table ' + esc((net.code || '').toUpperCase())}</h2>
     ${joining ? `<p class="muted">Connecting to table ${esc((net.code || '').toUpperCase())}…</p>` : `<div class="seats">${rows.join('')}</div>
-    <p class="muted">${inGame ? (me >= 0 ? 'Game in progress.' : "A game is in progress. You'll be dealt in next game.") : `Waiting for ${esc(host ? host.nick : 'the host')} to deal…`}${ppl.length < total ? ` Bots: ${LEVELS[net.level || 'normal']}.` : ''}</p>${tallyHTML()}`}
+    <p class="muted">${inGame ? (me >= 0 ? 'Game in progress.' : "A game is in progress. You'll be dealt in next game.") : `Waiting for ${esc(host ? host.nick : 'the host')} to deal…`}${ppl.length < total ? ` Bots: ${LEVELS[net.level || 'normal']}.` : ''}${!inGame && net.low != null ? ` Deck: ${deckLabel(net.low)}.` : ''}</p>${tallyHTML()}`}
     <div class="row"><button class="btn ghost" id="leaveB">Leave table</button>${inGame ? `<button class="btn primary" id="backB">Back to game</button>` : ''}</div>`, 'client');
   $('#leaveB').onclick = leaveTable;
   if (inGame) $('#backB').onclick = closeSheet;
@@ -2170,8 +2208,13 @@ function showEmote(seat, e) {
   document.body.appendChild(el);
   setTimeout(() => el.remove(), 2300);
 }
-function sendEmote(e) {
+function sendEmote(raw) {
+  const e = cleanEmoji(raw);
+  if (!e) { toast('Only emoji can be sent.'); return; }
   $('#emoPop').classList.remove('show');
+  recentEmo = [e, ...recentEmo.filter(x => x !== e)].slice(0, 6);
+  save('durak-recent-emo', { v: recentEmo });
+  buildEmoPop();
   if (mode === 'host') relayEmote(0, e);
   else if (mode === 'client' && net.tbl && me >= 0) {
     const now = Date.now();
@@ -2181,8 +2224,16 @@ function sendEmote(e) {
     net.tbl.emit('emo', { e }).catch(() => {});
   }
 }
-$('#emoPop').innerHTML = EMOJIS.map(e => `<button aria-label="Send ${e}">${e}</button>`).join('');
-$('#emoPop').addEventListener('click', e => { const b = e.target.closest('button'); if (b) sendEmote(b.textContent); });
+let recentEmo = (load('durak-recent-emo', { v: [] }).v || []).map(cleanEmoji).filter(Boolean).slice(0, 6);
+function buildEmoPop() {
+  const btns = a => a.map(e => `<button type="button" data-e="${esc(e)}" aria-label="Send ${esc(e)}">${esc(e)}</button>`).join('');
+  $('#emoPop').innerHTML = `${recentEmo.length ? `<div class="sub">Recent</div><div class="grid">${btns(recentEmo)}</div><div class="sub">Quick</div>` : ''}
+    <div class="grid">${btns(EMOJIS)}</div>
+    <form id="emoF"><input id="emoI" maxlength="24" autocomplete="off" enterkeyhint="send" placeholder="Type any emoji" aria-label="Type any emoji"><button class="btn primary" type="submit">Send</button></form>`;
+  $('#emoF').onsubmit = ev => { ev.preventDefault(); const v = $('#emoI').value; if (v.trim()) sendEmote(v); };
+}
+buildEmoPop();
+$('#emoPop').addEventListener('click', e => { const b = e.target.closest('button[data-e]'); if (b) sendEmote(b.dataset.e); });
 $('#emoBtn').onclick = e => { e.stopPropagation(); $('#emoPop').classList.toggle('show'); };
 document.addEventListener('pointerdown', e => { if (!e.target.closest('#emoPop, #emoBtn')) $('#emoPop').classList.remove('show'); });
 
@@ -2223,7 +2274,7 @@ function startSolo() {
   for (let i = 1; i < n; i++) seatInfo.push({ k: 'bot', nm: BOT_NAMES[i - 1] });
   const fd = lastDurak.n === n ? lastDurak.p : null;
   resetHandView(); gid++;
-  newGame({ players: n, humans: seatInfo.map((s, i) => i === 0), firstDefender: fd });
+  newGame({ players: n, humans: seatInfo.map((s, i) => i === 0), firstDefender: fd, low: lowFor(n) });
   render();
   toast(introText(G.introData), 3600);
   Hooks.schedule('think');

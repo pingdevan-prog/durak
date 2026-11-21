@@ -19,6 +19,8 @@ The host's phone runs the game. Phones connect directly through [PeerJS](https:/
 
 Your cards are only sent to your own phone, so nobody can peek at your hand.
 
+Tap 😀 during a game to react with any emoji: pick a quick one or type your own.
+
 ## Bot skill
 Pick it in the ☰ menu (or on the host's table screen when playing with friends). Bots never look at anyone's hidden cards.
 - **Easy:** no card counting, wastes trumps, gives up too soon.
@@ -28,7 +30,7 @@ Pick it in the ☰ menu (or on the host's table screen when playing with friends
 In test games between the bots, Smart was the durak 17% of the time one-on-one against Normal (Normal: 78%), and 9% at a 3-player table against two Normal bots. Easy was the durak 96% of the time against Normal.
 
 ## Rules in this version
-- 36 cards (6 to Ace); the card under the deck sets trumps.
+- Pick the lowest card in the deck in the ☰ menu (2 through 6). Auto uses 6 to Ace (36 cards) for 2 or 3 players and 5 to Ace (40 cards) for 4. The card under the deck sets trumps.
 - Anyone except the defender can throw in matching ranks, first come, first served; a timer bar ends the bout when nobody adds a card.
 - Defenders can pass the attack on with a card of the same rank before beating anything.
 - At most 5 cards per bout. Last game's durak is attacked first and can't pass that attack on.
